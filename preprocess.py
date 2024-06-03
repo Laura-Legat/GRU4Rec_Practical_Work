@@ -79,8 +79,8 @@ train_tr.to_csv(PATH_TO_PROCESSED_DATA + '_train_optim.csv', sep=',', index=Fals
 print('Validation set\n\tEvents: {}\n\tSessions: {}\n\tItems: {}'.format(len(valid), valid.SessionId.nunique(), valid.ItemId.nunique()))
 valid.to_csv(PATH_TO_PROCESSED_DATA + '_valid.csv', sep=',', index=False)
 
-print(train.head())
-print(test.head())
-print(train_tr.head())
-print(valid.head())
+#print(train.head())
+#print(test.head())
+#print(train_tr.head())
+#print(valid.head())
 

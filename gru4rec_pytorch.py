@@ -446,7 +446,7 @@ class GRU4Rec:
         target_scores = torch.diag(O)
         target_scores = target_scores.reshape(target_scores.shape[0],-1)
         return torch.sum((-torch.log(torch.sum(torch.sigmoid(target_scores-O)*softmax_scores, dim=1)+1e-24)+self.bpreg*torch.sum((O**2)*softmax_scores, dim=1)))
-    def fit(self, data, sample_cache_max_size=10000000, compatibility_mode=True, item_key='ItemId', session_key='SessionId', time_key='Time'):
+    def fit(self, data, sample_cache_max_size=10000000, compatibility_mode=True, item_key='ItemId', session_key='SessionId', time_key='Time'): # Training loop of the model
         self.error_during_train = False
         self.data_iterator = SessionDataIterator(data, self.batch_size, n_sample=self.n_sample, sample_alpha=self.sample_alpha, sample_cache_max_size=sample_cache_max_size, item_key=item_key, session_key=session_key, time_key=time_key, session_order='time', device=self.device)
         if self.logq and self.loss == 'cross-entropy':
@@ -457,7 +457,7 @@ class GRU4Rec:
             model._reset_weights_to_compatibility_mode()
         self.model = model
         opt = IndexedAdagradM(self.model.parameters(), self.learning_rate, self.momentum)
-        for epoch in range(self.n_epochs):
+        for epoch in range(self.n_epochs): # training loop
             t0 = time.time()
             H = []
             for i in range(len(self.layers)):
