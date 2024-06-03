@@ -116,6 +116,7 @@ else: # new model will be created and trained
         gru.savemodel(args.save_model)
     
 if args.test is not None:
+    # check what user has indicated to be the primary metric to be evaluated
     if args.primary_metric.lower() == 'recall':
         pm_index = 0
     elif args.primary_metric.lower() == 'mrr':
@@ -126,9 +127,10 @@ if args.test is not None:
         print('Loading test data...')
         test_data = load_data(test_file, args)
         print('Starting evaluation (cut-off={}, using {} mode for tiebreaking)'.format(args.measure, args.eval_type))
-        t0 = time.time()
+        t0 = time.time() # start time for eval
+        # evaluate model on test data with specified batch size
         res = evaluation.batch_eval(gru, test_data, batch_size=512, cutoff=args.measure, mode=args.eval_type, item_key=args.item_key, session_key=args.session_key, time_key=args.time_key)
-        t1 = time.time()
+        t1 = time.time() # end time for eval
         print('Evaluation took {:.2f}s'.format(t1 - t0))
         for c in args.measure:
             print('Recall@{}: {:.6f} MRR@{}: {:.6f}'.format(c, res[0][c], c, res[1][c]))
