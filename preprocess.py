@@ -51,9 +51,9 @@ test = test[test['ItemId'].isin(train['ItemId'])]
 #test = test[np.in1d(test.SessionId, tslength[tslength>=2].index)] -> I already do this in my create_sessionized_dataset.ipynb
 
 # print summary and save files
-print('Full train set\n\tEvents: {}\n\tSessions: {}\n\tItems: {}'.format(len(train), train.SessionId.nunique(), train.ItemId.nunique()))
+print('Full train set used for training the model\n\tEvents: {}\n\tSessions: {}\n\tItems: {}'.format(len(train), train.SessionId.nunique(), train.ItemId.nunique()))
 train.to_csv(PATH_TO_PROCESSED_DATA + '_train.csv', sep=',', index=False)
-print('Test set\n\tEvents: {}\n\tSessions: {}\n\tItems: {}'.format(len(test), test.SessionId.nunique(), test.ItemId.nunique()))
+print('Test set for final eval of the model\n\tEvents: {}\n\tSessions: {}\n\tItems: {}'.format(len(test), test.SessionId.nunique(), test.ItemId.nunique()))
 test.to_csv(PATH_TO_PROCESSED_DATA + '_test.csv', sep=',', index=False)
 
 tmax = train.Time.max() # calculate max timestamp of training set
@@ -74,9 +74,9 @@ valid = valid[valid['ItemId'].isin(train_tr['ItemId'])]
 #valid = valid[np.in1d(valid.SessionId, tslength[tslength>=2].index)] -> I already do this in my create_sessionized_dataset.ipynb
 
 # print summary and save files
-print('Train set\n\tEvents: {}\n\tSessions: {}\n\tItems: {}'.format(len(train_tr), train_tr.SessionId.nunique(), train_tr.ItemId.nunique()))
+print('Train set for hyperparam optimization and experimentation\n\tEvents: {}\n\tSessions: {}\n\tItems: {}'.format(len(train_tr), train_tr.SessionId.nunique(), train_tr.ItemId.nunique()))
 train_tr.to_csv(PATH_TO_PROCESSED_DATA + '_train_optim.csv', sep=',', index=False)
-print('Validation set\n\tEvents: {}\n\tSessions: {}\n\tItems: {}'.format(len(valid), valid.SessionId.nunique(), valid.ItemId.nunique()))
+print('Validation set (part of above train set)\n\tEvents: {}\n\tSessions: {}\n\tItems: {}'.format(len(valid), valid.SessionId.nunique(), valid.ItemId.nunique()))
 valid.to_csv(PATH_TO_PROCESSED_DATA + '_valid.csv', sep=',', index=False)
 
 #print(train.head())
