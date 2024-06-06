@@ -277,12 +277,25 @@ class SampleCache:
 
 class SessionDataIterator:
     def __init__(self, data, batch_size, n_sample=0, sample_alpha=0.75, sample_cache_max_size=10000000, item_key='ItemId', session_key='SessionId', time_key='Time', session_order='time', device=torch.device('cuda:0'), itemidmap=None):
+        """
+        
+        Args:
+            data: Sessionized input dataset -> Pandas DataFrame
+            batch_size: Desired batch size to be used during training -> int
+            n_sample: Number of negative samples to use -> int
+            sample_alpha: Distribution of negative samples during negative sampling -> float
+            session_order: 'time' or 'sequential'. Setting it to 'time' means that sessions are sorted and processed according to increasing timestamps -> str
+            itemidmap: An optional mapping of item IDs to indices
+
+        """
         self.device = device
         self.batch_size = batch_size
+
         if itemidmap is None:
-            itemids = data[item_key].unique()
-            self.n_items = len(itemids)
-            self.itemidmap = pd.Series(data=np.arange(self.n_items, dtype='int32'), index=itemids, name='ItemIdx')
+            itemids = data[item_key].unique() # extract number of unique item IDs
+            self.n_items = len(itemids) # counts total amount of unique items in data
+            # create mapping between item IDs and indices
+            self.itemidmap = pd.Series(data=np.arange(self.n_items, dtype='int32'), index=itemids, name='ItemIdx') # map item IDs to indices from 0 to self.n_items - 1; index=itemids associates each index with corresponding item ID
         else:
             print('Using existing item ID map')
             self.itemidmap = itemidmap
@@ -292,20 +305,24 @@ class SessionDataIterator:
             if n_not_in > 0:
                 #print('{} rows of the data contain unknown items and will be filtered'.format(n_not_in))
                 data = data.drop(data.index[~in_mask])
-        self.sort_if_needed(data, [session_key, time_key])
-        self.offset_sessions = self.compute_offset(data, session_key)
+
+        self.sort_if_needed(data, [session_key, time_key]) # sort by session and time keys
+        self.offset_sessions = self.compute_offset(data, session_key) # calculate starting indices of each session
+
         if session_order == 'time':
-            self.session_idx_arr = np.argsort(data.groupby(session_key)[time_key].min().values)
+            self.session_idx_arr = np.argsort(data.groupby(session_key)[time_key].min().values) # create array of smallest timestamps per session, argsort then gives an order which session should be processed first, which second etc. 
         else:
             self.session_idx_arr = np.arange(len(self.offset_sessions) - 1)
-        self.data_items = self.itemidmap[data[item_key].values].values
-        if n_sample > 0:
-            pop = data.groupby(item_key).size()
-            pop = pop[self.itemidmap.index.values].values**sample_alpha
-            pop = pop.cumsum() / pop.sum()
+
+        self.data_items = self.itemidmap[data[item_key].values].values # item indices are stored
+
+        if n_sample > 0: # negative sampling
+            pop = data.groupby(item_key).size() # calc popularity for each item
+            pop = pop[self.itemidmap.index.values].values**sample_alpha # assigns popularity to indices
+            pop = pop.cumsum() / pop.sum() # normalize popularity values -> calc probability for each item that this item is chosen as a negative sample
             pop[-1] = 1
             distr = torch.tensor(pop, device=self.device, dtype=torch.float32)
-            self.sample_cache = SampleCache(n_sample, sample_cache_max_size, distr, device=self.device)
+            self.sample_cache = SampleCache(n_sample, sample_cache_max_size, distr, device=self.device) # cache to store pre-sampled negative items -> efficiently retrieve negative samples
 
     def sort_if_needed(self, data, columns, any_order_first_dim=False):
         is_sorted = True
@@ -446,50 +463,76 @@ class GRU4Rec:
         target_scores = torch.diag(O)
         target_scores = target_scores.reshape(target_scores.shape[0],-1)
         return torch.sum((-torch.log(torch.sum(torch.sigmoid(target_scores-O)*softmax_scores, dim=1)+1e-24)+self.bpreg*torch.sum((O**2)*softmax_scores, dim=1)))
+    
     def fit(self, data, sample_cache_max_size=10000000, compatibility_mode=True, item_key='ItemId', session_key='SessionId', time_key='Time'): # Training loop of the model
-        self.error_during_train = False
-        self.data_iterator = SessionDataIterator(data, self.batch_size, n_sample=self.n_sample, sample_alpha=self.sample_alpha, sample_cache_max_size=sample_cache_max_size, item_key=item_key, session_key=session_key, time_key=time_key, session_order='time', device=self.device)
+        self.error_during_train = False # flag for tracking errors during training
+
+        self.data_iterator = SessionDataIterator(data, self.batch_size, n_sample=self.n_sample, sample_alpha=self.sample_alpha, sample_cache_max_size=sample_cache_max_size, item_key=item_key, session_key=session_key, time_key=time_key, session_order='time', device=self.device) # iterator to loop over sessionized data
+
         if self.logq and self.loss == 'cross-entropy':
             pop = data.groupby(item_key).size()
-            self.P0 = torch.tensor(pop[self.data_iterator.itemidmap.index.values], dtype=torch.float32, device=self.device)
-        model = GRU4RecModel(self.data_iterator.n_items, self.layers, self.dropout_p_embed, self.dropout_p_hidden, self.embedding, self.constrained_embedding).to(self.device)
+            self.P0 = torch.tensor(pop[self.data_iterator.itemidmap.index.values], dtype=torch.float32, device=self.device) # compute popularity of items to adjust weight
+
+        model = GRU4RecModel(self.data_iterator.n_items, self.layers, self.dropout_p_embed, self.dropout_p_hidden, self.embedding, self.constrained_embedding).to(self.device) # init GRU4Rec model and move to GPU
+
         if compatibility_mode: 
             model._reset_weights_to_compatibility_mode()
+
         self.model = model
-        opt = IndexedAdagradM(self.model.parameters(), self.learning_rate, self.momentum)
+
+        opt = IndexedAdagradM(self.model.parameters(), self.learning_rate, self.momentum) # init optimizer
+
         for epoch in range(self.n_epochs): # training loop
             t0 = time.time()
-            H = []
+            H = [] # init hidden state for each layer
+
             for i in range(len(self.layers)):
                 H.append(torch.zeros((self.batch_size, self.layers[i]), dtype=torch.float32, requires_grad=False, device=self.device))
-            c = []
-            cc = []
+
+            c = [] # track losses
+            cc = [] # track number of valid samples
             n_valid = self.batch_size
-            reset_hook = lambda n_valid, finished_mask, valid_mask: self._adjust_hidden(n_valid, finished_mask, valid_mask, H)
+            reset_hook = lambda n_valid, finished_mask, valid_mask: self._adjust_hidden(n_valid, finished_mask, valid_mask, H) # adjust hidden state when session ends
+
             for in_idx, out_idx in self.data_iterator(enable_neg_samples=(self.n_sample>0), reset_hook=reset_hook):
-                for h in H: h.detach_()
-                self.model.zero_grad()
+                for h in H: h.detach_() # detach hidden states to avoid gradient accumulation from prev batch
+
+                self.model.zero_grad() # reset grads to avoid accumulation
+
+                # forward pass
                 R = self.model.forward(in_idx, H, out_idx, training=True)
+
+                # loss per batch / batch_size = avg loss per sample
                 L = self.loss_function(R, out_idx, n_valid) / self.batch_size
-                L.backward()
-                opt.step()
+
+                L.backward() # computes grads
+                opt.step() # update model params using the opimizer
+
                 L = L.cpu().detach().numpy()
                 c.append(L)
                 cc.append(n_valid)
+
+                # NaN loss values -> logging the error
                 if np.isnan(L):
                     print(str(epoch) + ': NaN error!')
                     self.error_during_train = True
                     return
+                
             c = np.array(c)
             cc = np.array(cc)
-            avgc = np.sum(c * cc) / np.sum(cc)
+            avgc = np.sum(c * cc) / np.sum(cc) # compute avg loss for epoch
+
+            # handling/logging NaN losses
             if np.isnan(avgc):
                 print('Epoch {}: NaN error!'.format(str(epoch)))
                 self.error_during_train = True
                 return
-            t1 = time.time()
+            
+            t1 = time.time() # log training time
             dt = t1 - t0
+
             print('Epoch{} --> loss: {:.6f} \t({:.2f}s) \t[{:.2f} mb/s | {:.0f} e/s]'.format(epoch+1, avgc, dt, len(c)/dt, np.sum(cc)/dt))
+
     def _adjust_hidden(self, n_valid, finished_mask, valid_mask, H):
         if (self.n_sample == 0) and (n_valid < 2):
             return True

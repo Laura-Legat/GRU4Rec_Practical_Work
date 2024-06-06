@@ -79,7 +79,7 @@ def load_data(fname, args):
             sys.exit(1)
         print('Loading data from CSV file: {}'.format(fname))
         data = pd.read_csv(fname, sep=',', usecols=[args.session_key, args.item_key, args.time_key], dtype={args.session_key:'str', args.item_key:'int32', args.time_key: 'int64'})
-    return data
+    return data # returns df of dataset csv with SessionId, ItemId, Time cols
 
 # exit if multiple of these parameters are provided
 if (args.parameter_string is not None) + (args.parameter_file is not None) + (args.load_model) != 1:
