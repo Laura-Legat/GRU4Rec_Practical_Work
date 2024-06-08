@@ -92,12 +92,12 @@ class GRUEmbedding(nn.Module):
         init_parameter_matrix(self.Wh0, dim1_scale = 1)
         nn.init.zeros_(self.Bh0)
     def forward(self, X, H):
-        Vx = self.Wx0(X) + self.Bh0
+        Vx = self.Wx0(X) + self.Bh0 
         Vrz = torch.mm(H, self.Wrz0)
         vx_x, vx_r, vx_z = Vx.chunk(3, 1)
         vh_r, vh_z = Vrz.chunk(2, 1)
         r = torch.sigmoid(vx_r + vh_r)
-        z = torch.sigmoid(vx_z + vh_z)
+        z = torch.sigmoid(vx_z + vh_z) # sigmoid()
         h = torch.tanh(torch.mm(r * H, self.Wh0) + vx_x)
         h = (1.0 - z) * H + z * h
         return h
@@ -105,33 +105,41 @@ class GRUEmbedding(nn.Module):
 class GRU4RecModel(nn.Module):
     def __init__(self, n_items, layers=[100], dropout_p_embed=0.0, dropout_p_hidden=0.0, embedding=0, constrained_embedding=True):
         super(GRU4RecModel, self).__init__()
-        self.n_items = n_items
-        self.layers = layers
+        self.n_items = n_items # n of unique items
+        self.layers = layers # n of hidden layers
         self.dropout_p_embed = dropout_p_embed
         self.dropout_p_hidden = dropout_p_hidden
-        self.embedding = embedding
-        self.constrained_embedding = constrained_embedding
-        self.start = 0
+        self.embedding = embedding # embedding size for items
+        self.constrained_embedding = constrained_embedding # whether or not to use constrained embedding
+        self.start = 0 # layer start index
         if constrained_embedding:
-            n_input = layers[-1]
+            n_input = layers[-1] # set input size to size of last hidden layer
         elif embedding:
             self.E = nn.Embedding(n_items, embedding, sparse=True)
             n_input = embedding
         else:
             self.GE = GRUEmbedding(n_items, layers[0])
             n_input = n_items
-            self.start = 1
-        self.DE = nn.Dropout(dropout_p_embed)
-        self.G = []
-        self.D = []
-        for i in range(self.start, len(layers)):
-            self.G.append(nn.GRUCell(layers[i-1] if i > 0 else n_input, layers[i]))
-            self.D.append(nn.Dropout(dropout_p_hidden))
+            self.start = 1 # start processing from second layer ??
+
+        self.DE = nn.Dropout(dropout_p_embed) # set dropout for embeddings
+
+        self.G = [] # store GRU cells
+        self.D = [] # store dropout layers
+
+        for i in range(self.start, len(layers)): # for each layer in the GRU
+            self.G.append(nn.GRUCell(layers[i-1] if i > 0 else n_input, layers[i])) # new GRU layer for each layer in layers is created - input size is n_input at layer[0], for all other layers it is the size of the output of the previous layer
+            self.D.append(nn.Dropout(dropout_p_hidden)) # add dropout layer with certain drop prob
+
+        # store cells and dropout layers as nn.Modules in a list
         self.G = nn.ModuleList(self.G)
         self.D = nn.ModuleList(self.D)
+
         self.Wy = nn.Embedding(n_items, layers[-1], sparse=True)
         self.By = nn.Embedding(n_items, 1, sparse=True)
-        self.reset_parameters()
+        
+        self.reset_parameters() # init all model params
+
     @torch.no_grad()
     def reset_parameters(self):
         if self.embedding:
@@ -188,33 +196,33 @@ class GRU4RecModel(nn.Module):
     def embed_constrained(self, X, Y=None):
         if Y is not None:
             XY = torch.cat([X, Y])
-            EXY = self.Wy(XY)
+            EXY = self.Wy(XY) # if Y is provided, compute embeddings for concat version and split them into X and Y embeds again after
             split = X.shape[0]
-            E = EXY[:split]
-            O = EXY[split:]
-            B = self.By(Y)
+            E = EXY[:split] # embedding for X
+            O = EXY[split:] # embedding for Y
+            B = self.By(Y) # bias for Y
         else:
-            E = self.Wy(X)
-            O = self.Wy.weight
-            B = self.By.weight
+            E = self.Wy(X) # compute embeddings for X
+            O = self.Wy.weight # weights for X
+            B = self.By.weight # bias for X
         return E, O, B
     def embed_separate(self, X, Y=None):
-        E = self.E(X)
+        E = self.E(X) # embeds for X
         if Y is not None:
-            O = self.Wy(Y)
-            B = self.By(Y)
+            O = self.Wy(Y) # embeds for Y
+            B = self.By(Y) # biases for Y
         else:
-            O = self.Wy.weight
-            B = self.By.weight
+            O = self.Wy.weight # embeds for all items
+            B = self.By.weight # bias for all items
         return E, O, B
     def embed_gru(self, X, H, Y=None):
-        E = self.GE(X, H)
+        E = self.GE(X, H) # embeds for X
         if Y is not None:
-            O = self.Wy(Y)
-            B = self.By(Y)
+            O = self.Wy(Y) # embeds for Y
+            B = self.By(Y) # biases for Y
         else:
-            O = self.Wy.weight
-            B = self.By.weight
+            O = self.Wy.weight # embedding weights for all items = X
+            B = self.By.weight # biases for all items
         return E, O, B
     def embed(self, X, H, Y=None):
         if self.constrained_embedding:
@@ -225,23 +233,44 @@ class GRU4RecModel(nn.Module):
             E, O, B = self.embed_gru(X, H[0], Y)
         return E, O, B
     def hidden_step(self, X, H, training=False):
-        for i in range(self.start, len(self.layers)):
-            X = self.G[i](X, Variable(H[i]))
+        """
+        Args:
+            X: input tensor, embeddings of items
+            H: Hidden state tensor, one hidden state for each GRU layer
+            training: If model is in training mode or not
+        """
+        for i in range(self.start, len(self.layers)): # iterate over GRU layers
+            X = self.G[i](X, Variable(H[i])) # pass input x_t and hidden state through GRU cell, X is new hidden state
+
             if training:
                 X = self.D[i](X)
-            H[i] = X
+
+            H[i] = X # update hidden state of layer i
         return X
     def score_items(self, X, O, B):
         O = torch.mm(X, O.T) + B.T
         return O
+    
     def forward(self, X, H, Y, training=False):
+        """
+        Embedding -> Dropout Embd -> Pass through GRU layers -> scoring
+
+        Args:
+            X: Input tensor, item indices
+            H: Hidden state tensor
+            Y: Target tensor, target item indices
+            training: If model is in training mode or not
+        """
         E, O, B = self.embed(X, H, Y)
+
         if training: 
-            E = self.DE(E)
+            E = self.DE(E) # dropout - set some of emb values to 0 during training
+
         if not (self.constrained_embedding or self.embedding):
             H[0] = E
-        Xh = self.hidden_step(E, H, training=training)
-        R = self.score_items(Xh, O, B)
+
+        Xh = self.hidden_step(E, H, training=training) # pass embeddings E through stracked GRU layers
+        R = self.score_items(Xh, O, B) # get relevance scores
         return R
 
 class SampleCache:
