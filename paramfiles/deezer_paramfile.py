@@ -1,16 +1,17 @@
+# baseline configuration
 from collections import OrderedDict
 gru4rec_params = OrderedDict([
 ('loss', 'bpr-max'),
 ('constrained_embedding', True),
 ('embedding', 0),
 ('elu_param', 1),
-('layers', [512]),
-('n_epochs', 5), # usually 10, but 5 gets similar performance and here 5 is used for testing purposes
-('batch_size', 128),
-('dropout_p_embed', 0.5),
-('dropout_p_hidden', 0.3),
+('layers', [100]),
+('n_epochs', 10),
+('batch_size', 50),
+('dropout_p_embed', 0.4),
+('dropout_p_hidden', 0.2),
 ('learning_rate', 0.05),
-('momentum', 0.15),
+('momentum', 0.3),
 ('n_sample', 2048),
 ('sample_alpha', 0.3),
 ('bpreg', 0.9),
