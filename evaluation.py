@@ -20,7 +20,7 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=512, mode='conservative',
         for h in H: h.detach_()
         O = gru.model.forward(in_idxs, H, None, training=False)
         oscores = O.T
-        tscores = torch.diag(oscores[out_idxs])
+        tscores = torch.diag(oscores[out_idxs]) # select scores of the true (t(rue)scores) items in the sequence
         if mode == 'standard': ranks = (oscores > tscores).sum(dim=0) + 1
         elif mode == 'conservative': ranks = (oscores >= tscores).sum(dim=0)
         elif mode == 'median':  ranks = (oscores > tscores).sum(dim=0) + 0.5*((oscores == tscores).dim(axis=0) - 1) + 1

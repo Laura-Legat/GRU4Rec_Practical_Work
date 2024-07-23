@@ -129,7 +129,7 @@ if args.test is not None:
         print('Starting evaluation (cut-off={}, using {} mode for tiebreaking)'.format(args.measure, args.eval_type))
         t0 = time.time() # start time for eval
         # evaluate model on test data with specified batch size
-        res = evaluation.batch_eval(gru, test_data, batch_size=512, cutoff=args.measure, mode=args.eval_type, item_key=args.item_key, session_key=args.session_key, time_key=args.time_key)
+        res = evaluation.batch_eval(gru, test_data, batch_size=50, cutoff=args.measure, mode=args.eval_type, item_key=args.item_key, session_key=args.session_key, time_key=args.time_key)
         t1 = time.time() # end time for eval
         print('Evaluation took {:.2f}s'.format(t1 - t0))
         for c in args.measure:
