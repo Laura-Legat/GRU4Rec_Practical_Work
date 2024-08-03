@@ -115,7 +115,6 @@ class GRU4RecModel(nn.Module):
         if constrained_embedding:
             n_input = layers[-1] # set input size to size of last hidden layer
         elif embedding > 0:
-            print('embedding first')
             self.E = nn.Embedding(n_items, embedding, sparse=True)
             n_input = embedding
         else:
@@ -144,7 +143,6 @@ class GRU4RecModel(nn.Module):
     @torch.no_grad()
     def reset_parameters(self):
         if self.embedding > 0:
-            print('embedding 2nd')
             init_parameter_matrix(self.E.weight)
         elif not self.constrained_embedding:
             self.GE.reset_parameters()
