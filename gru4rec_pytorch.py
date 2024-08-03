@@ -114,7 +114,8 @@ class GRU4RecModel(nn.Module):
         self.start = 0 # layer start index
         if constrained_embedding:
             n_input = layers[-1] # set input size to size of last hidden layer
-        elif embedding:
+        elif embedding > 0:
+            print('embedding first')
             self.E = nn.Embedding(n_items, embedding, sparse=True)
             n_input = embedding
         else:
@@ -142,7 +143,8 @@ class GRU4RecModel(nn.Module):
 
     @torch.no_grad()
     def reset_parameters(self):
-        if self.embedding:
+        if self.embedding > 0:
+            print('embedding 2nd')
             init_parameter_matrix(self.E.weight)
         elif not self.constrained_embedding:
             self.GE.reset_parameters()
@@ -375,7 +377,7 @@ class SessionDataIterator:
             t0 = time.time()
             data.sort_values(columns, inplace=True)
             t1 = time.time()
-            print('Data is sorted in {:.2f}'.format(t1 - t0))
+            print('Data sorting took {:.2f}s'.format(t1 - t0))
 
     def compute_offset(self, data, column):
         offset = np.zeros(data[column].nunique() + 1, dtype=np.int32)

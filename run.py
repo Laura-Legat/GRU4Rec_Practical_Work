@@ -10,6 +10,7 @@ class MyHelpFormatter(argparse.HelpFormatter):
 
 parser = argparse.ArgumentParser(formatter_class=MyHelpFormatter, description='Train or load a GRU4Rec model & measure recall and MRR on the specified test set(s).')
 
+
 # define args the user can set via the command line
 parser.add_argument('path', metavar='PATH', type=str, help='Path to the training data (TAB separated file (.tsv or .txt) or pickled pandas.DataFrame object (.pickle)) (if the --load_model parameter is NOT provided) or to the serialized model (if the --load_model parameter is provided).')
 parser.add_argument('-ps', '--parameter_string', metavar='PARAM_STRING', type=str, help='Training parameters provided as a single parameter string. The format of the string is `param_name1=param_value1,param_name2=param_value2...`, e.g.: `loss=bpr-max,layers=100,constrained_embedding=True`. Boolean training parameters should be either True or False; parameters that can take a list should use / as the separator (e.g. layers=200/200). Mutually exclusive with the -pf (--parameter_file) and the -l (--load_model) arguments and one of the three must be provided.')
@@ -28,7 +29,7 @@ parser.add_argument('-tk', '--time_key', metavar='TK', type=str, default='Time',
 parser.add_argument('-pm', '--primary_metric', metavar='METRIC', choices=['recall', 'mrr'], default='recall', help='Set primary metric, recall or mrr (e.g. for paropt). (Default: recall)')
 parser.add_argument('-lpm', '--log_primary_metric', action='store_true', help='If provided, evaluation will log the value of the primary metric at the end of the run. Only works with one test file and list length.')
 args = parser.parse_args() # parse user-set args and store them in args variable
-
+print(args.measure)
 import os.path
 orig_cwd = os.getcwd()
 os.chdir(os.path.dirname(os.path.abspath(__file__))) # change dir to where run.py is located, __file__ always refers to the path of the script file being executed
@@ -91,12 +92,12 @@ if args.load_model:
     gru = GRU4Rec.loadmodel(args.path, device=args.device)
 else: # new model will be created and trained
     if args.parameter_file: # load training params from file
-        param_file_path = os.path.abspath(args.parameter_file)
-        param_dir, param_file = os.path.split(param_file_path)
-        spec = importlib.util.spec_from_file_location(param_file.split('.py')[0], os.path.abspath(args.parameter_file))
-        params = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(params)
-        gru4rec_params = params.gru4rec_params
+        param_file_path = os.path.abspath(args.parameter_file) # get absolute path of parameter file
+        param_dir, param_file = os.path.split(param_file_path) # split path into directory and file name
+        spec = importlib.util.spec_from_file_location(param_file.split('.py')[0], os.path.abspath(args.parameter_file)) #where to find python file and how to load it
+        params = importlib.util.module_from_spec(spec) # create empty module based on spec
+        spec.loader.exec_module(params) # executes the paramfile .py
+        gru4rec_params = params.gru4rec_params # accesses the stored params
         print('Loaded parameters from file: {}'.format(param_file_path))
     if args.parameter_string: # if parameter string is provided, parse it and create an ordered dict of params -> load training params from string directly
         gru4rec_params = OrderedDict([x.split('=') for x in args.parameter_string.split(',')])

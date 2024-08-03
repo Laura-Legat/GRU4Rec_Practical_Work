@@ -1,0 +1,4 @@
+{"name":"BS", "dtype":"categorical", "values":[512, 1024, 2048]}
+{"name":"num_epoch", "dtype":"int", "values":[1,2], "step":1}
+{"name":"LR", "dtype":"float", "values":[1e-5, 1e-3], "log":true}
+{"name":"l2_regularization", "dtype":"float", "values":[1e-5, 1e-2], "log":true}
