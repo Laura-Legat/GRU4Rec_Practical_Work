@@ -588,6 +588,7 @@ class GRU4Rec:
         pass
     def savemodel(self, path):
         torch.save(self, path)
+        print('Model saved.')
     @classmethod
     def loadmodel(cls, path, device='cuda:0'):
         gru = torch.load(path, map_location=device)
