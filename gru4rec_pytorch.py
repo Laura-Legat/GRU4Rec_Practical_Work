@@ -485,12 +485,15 @@ class GRU4Rec:
         X = X * hm
         e_x = torch.exp(X - X.max(dim=1, keepdim=True)[0]) * hm
         return e_x / e_x.sum(dim=1, keepdim=True)
+
     def bpr_max_loss_with_elu(self, O, Y, M):
         if self.elu_param > 0:
             O = nn.functional.elu(O, self.elu_param)
         softmax_scores = self.softmax_neg(O)
         target_scores = torch.diag(O)
         target_scores = target_scores.reshape(target_scores.shape[0],-1)
+
+        # BPR formula(?) pp. 5 in gru4rec paper + term for stabilization (1e-24) + regularization term +self.bpreg*torch.sum((O**2)*softmax_scores, dim=1)
         return torch.sum((-torch.log(torch.sum(torch.sigmoid(target_scores-O)*softmax_scores, dim=1)+1e-24)+self.bpreg*torch.sum((O**2)*softmax_scores, dim=1)))
     
     def fit(self, data, sample_cache_max_size=10000000, compatibility_mode=True, item_key='ItemId', session_key='SessionId', time_key='Time'): # Training loop of the model
