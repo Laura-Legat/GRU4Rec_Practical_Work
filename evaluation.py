@@ -33,3 +33,30 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=512, mode='conservative',
         recall[c] /= n
         mrr[c] /= n
     return recall, mrr
+
+def rerank(gru4rec_items, ex2vec_scores):
+    """
+    Reranks recommended items based on Ex2Vecs scores for those items;
+
+    Args:
+        gru4rec_items: List of lists of recommended next items, where each child list contains the top-k recommendations for the next items for one timestep
+        ex2vec_scores: The corresponding scores for each itemin gru4rec_items
+
+    Returns:
+        reranked_items: List of items in re-ranked order, based on their ex2vec score -> List
+    """
+
+    # define structure for reranked item list
+    reranked_items = []
+    for item_list, score_list in zip(gru4rec_items, ex2vec_scores): # go through outer list
+        # pair each item with its score in inner lists
+        item_score_pairs = list(zip(item_list, score_list)) # [(itemid, score), (itemid, score),...]
+
+        # sort pairs based on score value
+        sorted_item_score_pairs = sorted(item_score_pairs, key=lambda x: x[1], reverse=True)
+
+        #extract the items from the pairs
+        sorted_items = [item for item, score in sorted_item_score_pairs]
+        reranked_items.append(sorted_items)
+
+    return reranked_items
