@@ -305,7 +305,7 @@ class SampleCache:
         return sample
 
 class SessionDataIterator:
-    def __init__(self, data, batch_size, n_sample=0, sample_alpha=0.75, sample_cache_max_size=10000000, item_key='ItemId', user_key = 'userId', session_key='SessionId', time_key='Time', session_order='time', device=torch.device('cuda:0'), itemidmap=None):
+    def __init__(self, data, batch_size, n_sample=0, sample_alpha=0.75, sample_cache_max_size=10000000, item_key='ItemId', user_key = 'userId', session_key='SessionId', rel_int_key="relational_interval", time_key='Time', session_order='time', device=torch.device('cuda:0'), itemidmap=None):
         """
         
         Args:
@@ -345,8 +345,6 @@ class SessionDataIterator:
             self.session_idx_arr = np.arange(len(self.offset_sessions) - 1)
 
         self.data_items = self.itemidmap[data[item_key].values].values # item indices are stored
-        self.data_sessions = data[session_key].tolist()
-        self.data_users = data[user_key].tolist()
 
         if n_sample > 0: # negative sampling
             pop = data.groupby(item_key).size() # calc popularity for each item
@@ -404,16 +402,18 @@ class SessionDataIterator:
                 # extract current user and sessionid to make it easier for ex2vec inference
                 curr_users = []
                 curr_sessions = []
+                curr_rel_ints = []
                 for j in range(n_valid):
                     curr_users.append(self.data.iloc[start[j]]['userId'])
                     curr_sessions.append(self.data.iloc[start[j]]['SessionId'])
+                    curr_rel_ints.append(self.data.iloc[start[j]]['relational_interval'])
 
                 if enable_neg_samples:
                     sample = self.sample_cache.get_sample()
                     y = torch.cat([out_idx, sample])
                 else:
                     y = out_idx
-                yield in_idx, y, curr_users, curr_sessions
+                yield in_idx, y, curr_users, curr_sessions, curr_rel_ints
             start = start+minlen-1
             finished_mask = (end-start<=1)
             n_finished = finished_mask.sum()
