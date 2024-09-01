@@ -1,6 +1,8 @@
 from gru4rec_pytorch import SessionDataIterator
 import torch
-from data_sampler import  get_rel_int_dict
+import sys
+sys.path.append('/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI')
+from data_sampler import get_rel_int_dict
 import numpy as np
 
 # define helper function for reverse mapping indices -> item IDs, as
@@ -17,7 +19,7 @@ def get_itemId(gru, idx):
   return gru.data_iterator.itemidmap.index[gru.data_iterator.itemidmap.iloc[idx]]
 
 @torch.no_grad() # disable grad computation for this function
-def batch_eval(gru, ex2vec, test_data, cutoff=[20], batch_size=50, mode='conservative', item_key='itemId', user_key='userId', rel_int_key='relational_interval', session_key='SessionId', time_key='timestamp', combination=False, k=879):
+def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', item_key='itemId', user_key='userId', rel_int_key='relational_interval', session_key='SessionId', time_key='timestamp', combination=False, k=10, ex2vec=None):
     """
     Evaluates the model's recall and MRR for varying cutoffs.
 
@@ -61,9 +63,9 @@ def batch_eval(gru, ex2vec, test_data, cutoff=[20], batch_size=50, mode='conserv
         for h in H: h.detach_()
 
         O = gru.model.forward(in_idxs, H, None, training=False) # for each item in in_idxs, calcuate a next-item probability for all items in the whole dataset (batch_size, n_all_items), e.g. (50, 879) or (10,879)
-        top_k_scores, top_indices = torch.topk(O, k, dim=1)
 
         if combination:
+            top_k_scores, top_indices = torch.topk(O, k, dim=1)
             in_idx_ids = [get_itemId(gru, i) for i in in_idxs.tolist()]
             out_idx_ids = [get_itemId(gru, i) for i in out_idxs.tolist()]
             #print("\nInput item ids: ", in_idx_ids)
@@ -100,7 +102,8 @@ def batch_eval(gru, ex2vec, test_data, cutoff=[20], batch_size=50, mode='conserv
             rel_int_tensor = torch.tensor(padded_rel_ints).cuda()
 
             # scoring top-k next-item predictions with ex2vec
-            scores = ex2vec(user_tensor, item_tensor, rel_int_tensor)
+            if ex2vec:
+              scores = ex2vec(user_tensor, item_tensor, rel_int_tensor)
             # split up flattened scores into list of lists again
             scores = [scores[i:i+k] for i in range(0,len(scores),k)]
             # convert recommendation tensors to lists, so we get a list of lists, instead of a list of tensors

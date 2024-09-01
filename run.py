@@ -1,6 +1,7 @@
 import argparse # lib for parsing command-line args
 import os
 import shutil # functionality for working with files
+from ast import literal_eval
 
 # format help message nicely, which is displayed when running python run.py -h
 class MyHelpFormatter(argparse.HelpFormatter):
@@ -26,6 +27,8 @@ parser.add_argument('-d', '--device', metavar='D', type=str, default='cuda:0', h
 parser.add_argument('-ik', '--item_key', metavar='IK', type=str, default='ItemId', help='Column name corresponding to the item IDs (detault: ItemId).')
 parser.add_argument('-sk', '--session_key', metavar='SK', type=str, default='SessionId', help='Column name corresponding to the session IDs (default: SessionId).')
 parser.add_argument('-tk', '--time_key', metavar='TK', type=str, default='Time', help='Column name corresponding to the timestamp (default: Time).')
+parser.add_argument('-uk', '--user_key', metavar='UK', type=str, default='userId', help='Column name corresponding to the user ID (default: userId).')
+parser.add_argument('-rk', '--rel_int_key', metavar='RK', type=str, default='relational_interval', help='Column name corresponding to the relational interval (default: relational_interval).')
 parser.add_argument('-pm', '--primary_metric', metavar='METRIC', choices=['recall', 'mrr'], default='recall', help='Set primary metric, recall or mrr (e.g. for paropt). (Default: recall)')
 parser.add_argument('-lpm', '--log_primary_metric', action='store_true', help='If provided, evaluation will log the value of the primary metric at the end of the run. Only works with one test file and list length.')
 args = parser.parse_args() # parse user-set args and store them in args variable
@@ -63,6 +66,10 @@ def load_data(fname, args):
             print('ERROR. The column specified for time "{}" is not in the data file ({})'.format(args.time_key, fname))
             print('The default column name is "Time", but you can specify otherwise by setting the `time_key` parameter of the model.')
             sys.exit(1)
+        if args.user_key not in data.columns:
+            print('ERROR. The column specified for time "{}" is not in the data file ({})'.format(args.user_key, fname))
+            print('The default column name is "userId", but you can specify otherwise by setting the `user_key` parameter of the model.')
+            sys.exit(1)
     else:
         with open(fname, 'rt') as f: # opens file in Read-mode and Text-mode
             header = f.readline().strip().split(',') # get column names
@@ -78,8 +85,16 @@ def load_data(fname, args):
             print('ERROR. The column specified for time "{}" is not in the data file ({})'.format(args.time_key, fname))
             print('The default column name is "Time", but you can specify otherwise by setting the `time_key` parameter of the model.')
             sys.exit(1)
+        if args.user_key not in header:
+            print('ERROR. The column specified for time "{}" is not in the data file ({})'.format(args.user_key, fname))
+            print('The default column name is "userId", but you can specify otherwise by setting the `user_key` parameter of the model.')
+            sys.exit(1)
+        if args.rel_int_key not in header:
+            print('ERROR. The column specified for time "{}" is not in the data file ({})'.format(args.rel_int_key, fname))
+            print('The default column name is "relational_interval", but you can specify otherwise by setting the `rel_int_key` parameter of the model.')
+            sys.exit(1)
         print('Loading data from CSV file: {}'.format(fname))
-        data = pd.read_csv(fname, sep=',', usecols=[args.session_key, args.item_key, args.time_key], dtype={args.session_key:'str', args.item_key:'int32', args.time_key: 'int64'})
+        data = pd.read_csv(fname, sep=',', usecols=[args.user_key, args.session_key, args.item_key, args.time_key, args.rel_int_key], dtype={args.user_key:'int32', args.session_key:'str', args.item_key:'int32', args.time_key: 'int64'}, converters={'relational_interval':literal_eval})
     return data # returns df of dataset csv with SessionId, ItemId, Time cols
 
 # exit if multiple of these parameters are provided

@@ -537,7 +537,7 @@ class GRU4Rec:
             n_valid = self.batch_size
             reset_hook = lambda n_valid, finished_mask, valid_mask: self._adjust_hidden(n_valid, finished_mask, valid_mask, H) # adjust hidden state when session ends
 
-            for in_idx, out_idx in self.data_iterator(enable_neg_samples=(self.n_sample>0), reset_hook=reset_hook):
+            for in_idx, out_idx, _, _, _ in self.data_iterator(enable_neg_samples=(self.n_sample>0), reset_hook=reset_hook):
                 for h in H: h.detach_() # detach hidden states to avoid gradient accumulation from prev batch
 
                 self.model.zero_grad() # reset grads to avoid accumulation
