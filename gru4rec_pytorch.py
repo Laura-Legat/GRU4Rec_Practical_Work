@@ -6,6 +6,7 @@ from torch import autograd, nn
 from torch.autograd import Variable
 from collections import OrderedDict
 import time
+import os
 
 from torch.optim import Optimizer
 class IndexedAdagradM(Optimizer):
@@ -600,9 +601,26 @@ class GRU4Rec:
             if hasattr(self.data_iterator, 'sample_cache'):
                 self.data_iterator.sample_cache.device = device
         pass
-    def savemodel(self, path):
+    def savemodel(self, path, param_str: str, metric_str: str):
         torch.save(self, path)
-        print('Model saved.')
+
+        model_name = os.path.basename(path).split('.')[0] # split out model name without .pt ending
+
+        new_row = {
+            'model_name': model_name,
+            'params': param_str,
+            'results': metric_str
+        }
+
+        new_row_df = pd.DataFrame(new_row)
+        log_path = '/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI/tables/best_models.csv'
+          
+        if os.path.exists(log_path): # append contents without header
+            new_row_df.to_csv(log_path, mode='a', header=False, index=False)
+        else: # create header and then append contents
+            new_row_df.to_csv(log_path, mode='w', header=True, index=False)
+
+        print('Final model saved.')
     @classmethod
     def loadmodel(cls, path, device='cuda:0'):
         gru = torch.load(path, map_location=device)

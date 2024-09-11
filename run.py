@@ -127,10 +127,6 @@ else: # new model will be created and trained
     gru.fit(data, sample_cache_max_size=args.sample_store_size, item_key=args.item_key, session_key=args.session_key, time_key=args.time_key)
     t1 = time.time() # record current end time
     print('Total training time: {:.2f}s'.format(t1 - t0))
-    # save trained model
-    if args.save_model is not None:
-        print('Saving trained model to: {}'.format(args.save_model))
-        gru.savemodel(args.save_model)
     
 if args.test is not None:
     # check what user has indicated to be the primary metric to be evaluated
@@ -150,9 +146,17 @@ if args.test is not None:
         res = evaluation.batch_eval(gru, test_data, batch_size=int(gru4rec_params.get('batch_size')), cutoff=args.measure, mode=args.eval_type, item_key=args.item_key, session_key=args.session_key, time_key=args.time_key)
         t1 = time.time() # end time for eval
         print('Evaluation took {:.2f}s'.format(t1 - t0))
+
+        metric_str = ''
         for c in args.measure:
             print('Recall@{}: {:.6f} MRR@{}: {:.6f}'.format(c, res[0][c], c, res[1][c]))
+            metric_str.append(f"recall@{c}={res[0][c]}, mrr@{c}={res[1][c]}")
 
         if args.log_primary_metric:
             print('PRIMARY METRIC: {}'.format([x for x in res[pm_index].values()][0]))
+
+    # save trained model
+    if args.save_model is not None:
+        print('Saving trained model to: {}'.format(args.save_model))
+        gru.savemodel(args.save_model, args.parameter_string, metric_str)
 
