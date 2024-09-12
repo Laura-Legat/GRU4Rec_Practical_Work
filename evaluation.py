@@ -19,7 +19,7 @@ def get_itemId(gru, idx):
   return gru.data_iterator.itemidmap.index[gru.data_iterator.itemidmap.iloc[idx]]
 
 @torch.no_grad() # disable grad computation for this function
-def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', item_key='itemId', user_key='userId', rel_int_key='relational_interval', session_key='SessionId', time_key='timestamp', combination=False, k=10, ex2vec=None):
+def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', item_key='itemId', user_key='userId', rel_int_key='relational_interval', session_key='SessionId', time_key='timestamp', combination=None, k=10, ex2vec=None, alpha=0.5):
     """
     Evaluates the model's recall and MRR for varying cutoffs.
 
@@ -32,8 +32,14 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
         mode: Ranking mode used in the evaluation (standard, conservative, median)
         item_key: Column name of itemid column
         session_key: Column name of session id column
-        combination: If reranking should be done with ex2vec (=True), or normal gru4rec evaluation (=False)
+        combination: How the score of ex2vec and gru4rec should be combined (str in [direct, weighted, threshold, boosted, mult]), for no combination it is None
+            direct: Re-rank gru4rec solely based on the Ex2Vec scores
+            weighted: Weighted combination of score with hyperparameter alpha
+            threshold: Get top-k predictions from gru4rec and filter out any that fall under a certain Ex2Vec threshold
+            boosted: Boost items where Ex2Vec has high interest scores with boosted_score = gru4rec_score + lambda * ex2vec_score
+            mult: Simple ensemble model where scores are blended through multiplication
         time_key: Column name of timestamp column
+        k: Top-k scores to choose from list of all gru4rec scores. Set k=879 for re-ranking all items via ex2vec. k decides "re-rank all + cut" or "cut first + re-rank filtered items".
     """
     if gru.error_during_train: 
         raise Exception('Attempting to evaluate a model that wasn\'t trained properly (error_during_train=True)')
@@ -45,7 +51,7 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
         recall[c] = 0
         mrr[c] = 0
     
-    if combination:
+    if combination != None:
         # get modifiable copy of rel_int_dict
         rel_int_dict = get_rel_int_dict().copy()
 
@@ -64,14 +70,11 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
 
         O = gru.model.forward(in_idxs, H, None, training=False) # for each item in in_idxs, calcuate a next-item probability for all items in the whole dataset (batch_size, n_all_items), e.g. (50, 879) or (10,879)
 
-        if combination:
-            top_k_scores, top_indices = torch.topk(O, k, dim=1)
-            in_idx_ids = [get_itemId(gru, i) for i in in_idxs.tolist()]
-            out_idx_ids = [get_itemId(gru, i) for i in out_idxs.tolist()]
-            #print("\nInput item ids: ", in_idx_ids)
-            #print("Out idxs: ", out_idx_ids)
-            #print("From users: ", userids)
-            #print("With rel ints: ", rel_ints)
+        if combination != None:
+            top_k_scores, top_indices = torch.topk(O, k, dim=1) # get top-k scores from all gru4rec item scores
+
+            in_idx_ids = [get_itemId(gru, i) for i in in_idxs.tolist()] # get ids of input items contained in curr batch
+            out_idx_ids = [get_itemId(gru, i) for i in out_idxs.tolist()] # get corresponding targets
 
             # update rel_ints dict with current, in-session repetitions
             for item, user, rel_int in zip(in_idx_ids, userids, rel_ints):
@@ -103,15 +106,14 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
 
             # scoring top-k next-item predictions with ex2vec
             if ex2vec:
-              scores = ex2vec(user_tensor, item_tensor, rel_int_tensor)
+              ex2vec_scores = ex2vec(user_tensor, item_tensor, rel_int_tensor)
             # split up flattened scores into list of lists again
-            scores = [scores[i:i+k] for i in range(0,len(scores),k)]
+            ex2vec_scores = [ex2vec_scores[i:i+k] for i in range(0,len(ex2vec_scores),k)]
             # convert recommendation tensors to lists, so we get a list of lists, instead of a list of tensors
-            scores = [score_tensor.tolist() for score_tensor in scores]
-            #print(f'Ex2vec scores for top-{k}: {scores}')
+            ex2vec_scores = [score_tensor.tolist() for score_tensor in ex2vec_scores]
 
             # reranking based on the score
-            reranked_scores = rerank(top_k_item_ids, scores)
+            reranked_scores = rerank(top_k_item_ids, top_k_scores, ex2vec_scores, alpha, combination) # either 879 or top-k
             #print(f'Reranked items for {in_idx_ids}, respectively: {reranked_scores}')
 
             combined_ranks = []
@@ -122,7 +124,6 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
                 except ValueError:
                     combined_ranks.append(len(reranked_scores[batch_i]) + 1) # if index does not appear, give a rank that is outside of the list length (=invalid rank)
             combined_ranks = torch.tensor(combined_ranks).cuda()
-            #print(combined_ranks)
 
             for c in cutoff:
                 recall[c] += (combined_ranks <= c).sum().cpu().numpy()
@@ -136,7 +137,6 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
             elif mode == 'conservative': ranks = (oscores >= tscores).sum(dim=0)
             elif mode == 'median':  ranks = (oscores > tscores).sum(dim=0) + 0.5*((oscores == tscores).dim(axis=0) - 1) + 1
             else: raise NotImplementedError
-            #print(ranks)
 
             for c in cutoff:
                 recall[c] += (ranks <= c).sum().cpu().numpy() #e.g. if cutoff==5, then it counts how often the most relevant item is among the top 5  ranks
@@ -148,13 +148,15 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
         mrr[c] /= n # avg mrr over all processed batches
     return recall, mrr
 
-def rerank(gru4rec_items, ex2vec_scores):
+def rerank(gru4rec_items, gru4rec_scores, ex2vec_scores, alpha, mode = 'direct'):
     """
     Reranks recommended items based on Ex2Vecs scores for those items;
 
     Args:
         gru4rec_items: List of lists of recommended next items, where each child list contains the top-k recommendations for the next items for one timestep
+        gru4rec_scores: Contains the corresponding scores for the items, list of lists
         ex2vec_scores: The corresponding scores for each itemin gru4rec_items
+        mode: The combination modality (str in [direct, weighted, threshold, boosted, mult])
 
     Returns:
         reranked_items: List of items in re-ranked order, based on their ex2vec score -> List
@@ -162,15 +164,25 @@ def rerank(gru4rec_items, ex2vec_scores):
 
     # define structure for reranked item list
     reranked_items = []
-    for item_list, score_list in zip(gru4rec_items, ex2vec_scores): # go through outer list
-        # pair each item with its score in inner lists
-        item_score_pairs = list(zip(item_list, score_list)) # [(itemid, score), (itemid, score),...]
+    for gru4rec_item_list, gru4rec_score_list, ex2vec_score_list in zip(gru4rec_items, gru4rec_scores, ex2vec_scores): # loop through outer lists
+        if mode == 'direct': # assign each gru4rec item an ex2vec score directly
+            # pair each item with its score in inner lists
+            item_score_pairs = list(zip(gru4rec_item_list, ex2vec_score_list)) # [(itemid, score), (itemid, score),...]
+        elif mode == 'weighted': # weigh the influence of both models
+            combined_score_list = [(alpha * gru4rec_score) + ((1-alpha) * ex2vec_score) for gru4rec_score, ex2vec_score in zip(gru4rec_score_list, ex2vec_score_list)]
+            item_score_pairs = list(zip(gru4rec_item_list, combined_score_list))
+        elif mode == 'boosted': # ex2vec score is taken more into consideration (boosted)
+            combined_score_list = [gru4rec_score + (alpha * ex2vec_score) for gru4rec_score, ex2vec_score in zip(gru4rec_score_list, ex2vec_score_list)]
+            item_score_pairs = list(zip(gru4rec_item_list, combined_score_list))
+        elif mode == 'mult': # multiply the scores
+            combined_score_list = [gru4rec_score * ex2vec_score for gru4rec_score, ex2vec_score in zip(gru4rec_score_list, ex2vec_score_list)]
+            item_score_pairs = list(zip(gru4rec_item_list, combined_score_list))
+        else: raise NotImplementedError
 
-        # sort pairs based on score value
+        # sort pairs descendingly based on score value
         sorted_item_score_pairs = sorted(item_score_pairs, key=lambda x: x[1], reverse=True)
 
         #extract the items from the pairs
         sorted_items = [item for item, score in sorted_item_score_pairs]
         reranked_items.append(sorted_items)
-
     return reranked_items
