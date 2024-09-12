@@ -40,6 +40,7 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
             mult: Simple ensemble model where scores are blended through multiplication
         time_key: Column name of timestamp column
         k: Top-k scores to choose from list of all gru4rec scores. Set k=879 for re-ranking all items via ex2vec. k decides "re-rank all + cut" or "cut first + re-rank filtered items".
+        alpha:
     """
     if gru.error_during_train: 
         raise Exception('Attempting to evaluate a model that wasn\'t trained properly (error_during_train=True)')
