@@ -148,9 +148,11 @@ if args.test is not None:
         print('Evaluation took {:.2f}s'.format(t1 - t0))
 
         metric_str = ''
-        for c in args.measure:
+        for i, c in enumerate(args.measure):
             print('Recall@{}: {:.6f} MRR@{}: {:.6f}'.format(c, res[0][c], c, res[1][c]))
-            metric_str.append(f"recall@{c}={res[0][c]}, mrr@{c}={res[1][c]}")
+            metric_str += f"recall@{c}={res[0][c]}, mrr@{c}={res[1][c]}"
+            if i != (len(args.measure) - 1):
+                metric_str += ", "
 
         if args.log_primary_metric:
             print('PRIMARY METRIC: {}'.format([x for x in res[pm_index].values()][0]))
@@ -159,4 +161,3 @@ if args.test is not None:
     if args.save_model is not None:
         print('Saving trained model to: {}'.format(args.save_model))
         gru.savemodel(args.save_model, args.parameter_string, metric_str)
-

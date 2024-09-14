@@ -607,9 +607,10 @@ class GRU4Rec:
         model_name = os.path.basename(path).split('.')[0] # split out model name without .pt ending
 
         new_row = {
-            'model_name': model_name,
-            'params': param_str,
-            'results': metric_str
+            'model_name': [model_name],
+            'item_embds': [''],
+            'params': [param_str],
+            'results': [metric_str]
         }
 
         new_row_df = pd.DataFrame(new_row)
