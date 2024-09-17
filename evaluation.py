@@ -66,6 +66,9 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
     data_iterator = SessionDataIterator(test_data, batch_size, 0, 0, 0, item_key, user_key, session_key, rel_int_key, time_key, device=gru.device, itemidmap=gru.data_iterator.itemidmap)
 
     n = 0
+    #n_lists = 0
+    #n_intersection = 0
+    #n_same_idx = 0
     for in_idxs, out_idxs, userids, sessionids, rel_ints in data_iterator(enable_neg_samples=False, reset_hook=reset_hook):
         for h in H: h.detach_()
 
@@ -114,16 +117,30 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
             ex2vec_scores = [score_tensor.tolist() for score_tensor in ex2vec_scores]
 
             # reranking based on the score
-            reranked_scores = rerank(top_k_item_ids, top_k_scores, ex2vec_scores, alpha, combination) # either 879 or top-k
+            reranked_items = rerank(top_k_item_ids, top_k_scores, ex2vec_scores, alpha, combination) # either 879 or top-k
             #print(f'Reranked items for {in_idx_ids}, respectively: {reranked_scores}')
+
+            """
+            # calculate how many items are still in re-ranked list
+            set_orig = set(top_k_item_ids)
+            set_reranked = set(reranked_items)
+            intersection = len(set_orig.intersection(set_reranked))
+            n_intersection += intersection
+            n_lists += len(set_orig)
+
+            # calculate how many items got reranked
+            min_length = min(len(top_k_item_ids), len(reranked_items))
+            same_idx_cnt = sum(1 for i in  range(min_length) if top_k_item_ids[i] == reranked_items[i])
+            n_same_idx += same_idx_cnt
+            """
 
             combined_ranks = []
             for batch_i, out_idx in enumerate(out_idxs):
                 try:
-                    index = reranked_scores[batch_i].index(out_idx) # search if i-th out_idx (target item) is in the i-th sublist of the reranked score lists
+                    index = reranked_items[batch_i].index(out_idx) # search if i-th out_idx (target item) is in the i-th sublist of the reranked score lists
                     combined_ranks.append(index + 1) # if yes, append the index it appears at + 1 to get a rank comparison with the otherwise calculated ranks
                 except ValueError:
-                    combined_ranks.append(len(reranked_scores[batch_i]) + 1) # if index does not appear, give a rank that is outside of the list length (=invalid rank)
+                    combined_ranks.append(len(reranked_items[batch_i]) + 1) # if index does not appear, give a rank that is outside of the list length (=invalid rank)
             combined_ranks = torch.tensor(combined_ranks).cuda()
 
             for c in cutoff:
@@ -147,6 +164,12 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
     for c in cutoff:
         recall[c] /= n # avg recall over all processed batches
         mrr[c] /= n # avg mrr over all processed batches
+
+    """
+    if combination != None:
+        print("Percentage of original items which are still in the reranked list: ", (n_intersection/n_lists))
+        print("Percentage of original items which are still at the same index in the re-ranked item list: ", (n_same_idx/n_lists))
+    """
     return recall, mrr
 
 def rerank(gru4rec_items, gru4rec_scores, ex2vec_scores, alpha, mode = 'direct'):
