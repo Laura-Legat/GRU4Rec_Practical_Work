@@ -25,22 +25,23 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
 
     Args:
         gru: The GRU4Rec model being evaluated
-        ex2vec: Trained Ex2Vec model for scoring gru4rec's top-k items
         test_data: Dataset to evaluate the GRU4Rec model on
         cutoff: List of values to use as cutoffs for MRR and recall calculations
         batch_size: The batch size for processing the test dataset
         mode: Ranking mode used in the evaluation (standard, conservative, median)
-        item_key: Column name of itemid column
-        session_key: Column name of session id column
-        combination: How the score of ex2vec and gru4rec should be combined (str in [direct, weighted, threshold, boosted, mult]), for no combination it is None
+        item_key: Column name of item ID column in the dataset
+        user_key: Column name of the user ID column in the dataset
+        rel_int_key: Column name of the relational interval column in the dataset
+        session_key: Column name of session ID column in the dataset
+        time_key: Column name of timestamp column in the dataset
+        combination: How the score of ex2vec and gru4rec should be combined (str in [direct, weighted, boosted, mult]) during inference, for no combination it is None. The modes are:
             direct: Re-rank gru4rec solely based on the Ex2Vec scores
-            weighted: Weighted combination of score with hyperparameter alpha
-            threshold: Get top-k predictions from gru4rec and filter out any that fall under a certain Ex2Vec threshold
+            weighted: Weighted combination of score with hyperparameter alpha, combined_score = (alpha * gru4rec_score) + ((1 - alpha) * ex2vec_score))
             boosted: Boost items where Ex2Vec has high interest scores with boosted_score = gru4rec_score + lambda * ex2vec_score
-            mult: Simple ensemble model where scores are blended through multiplication
-        time_key: Column name of timestamp column
+            mult: Simple ensemble model where scores are blended through multiplication, combined_score = gru4rec_score * ex2vec_score
         k: Top-k scores to choose from list of all gru4rec scores. Set k=879 for re-ranking all items via ex2vec. k decides "re-rank all + cut" or "cut first + re-rank filtered items".
-        alpha:
+        ex2vec: Trained Ex2Vec model for scoring gru4rec's top-k items, if no combination then it is None
+        alpha: Parameter set for weighted/boosted combination of scores, i.e. how much to take each models' predictions into account for the final score
     """
     if gru.error_during_train: 
         raise Exception('Attempting to evaluate a model that wasn\'t trained properly (error_during_train=True)')
@@ -118,7 +119,6 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
 
             # reranking based on the score
             reranked_items = rerank(top_k_item_ids, top_k_scores, ex2vec_scores, alpha, combination) # either 879 or top-k
-            #print(f'Reranked items for {in_idx_ids}, respectively: {reranked_scores}')
 
             """
             # calculate how many items are still in re-ranked list
@@ -180,7 +180,8 @@ def rerank(gru4rec_items, gru4rec_scores, ex2vec_scores, alpha, mode = 'direct')
         gru4rec_items: List of lists of recommended next items, where each child list contains the top-k recommendations for the next items for one timestep
         gru4rec_scores: Contains the corresponding scores for the items, list of lists
         ex2vec_scores: The corresponding scores for each itemin gru4rec_items
-        mode: The combination modality (str in [direct, weighted, threshold, boosted, mult])
+        alpha: Parameter set for weighted/boosted combination of scores, i.e. how much to take each models' predictions into account for the final score
+        mode: The combination modality (str in [direct, weighted, boosted, mult])
 
     Returns:
         reranked_items: List of items in re-ranked order, based on their ex2vec score -> List
