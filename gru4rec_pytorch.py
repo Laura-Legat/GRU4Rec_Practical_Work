@@ -7,6 +7,13 @@ from torch.autograd import Variable
 from collections import OrderedDict
 import time
 import os
+import gru4rec_utils
+import sys
+sys.path.append('/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI')
+from data_sampler import get_rel_int_dict
+from ex2vec import Ex2VecEngine
+from tqdm import tqdm
+
 
 from torch.optim import Optimizer
 class IndexedAdagradM(Optimizer):
@@ -323,6 +330,7 @@ class SessionDataIterator:
         self.data = data
 
         if itemidmap is None:
+            print('Creating new item ID map')
             itemids = data[item_key].unique() # extract number of unique item IDs
             self.n_items = len(itemids) # counts total amount of unique items in data
             # create mapping between item IDs and indices
@@ -508,7 +516,7 @@ class GRU4Rec:
         # BPR formula(?) pp. 5 in gru4rec paper + term for stabilization (1e-24) + regularization term +self.bpreg*torch.sum((O**2)*softmax_scores, dim=1)
         return torch.sum((-torch.log(torch.sum(torch.sigmoid(target_scores-O)*softmax_scores, dim=1)+1e-24)+self.bpreg*torch.sum((O**2)*softmax_scores, dim=1)))
     
-    def fit(self, data, sample_cache_max_size=10000000, compatibility_mode=True, item_key='ItemId', session_key='SessionId', time_key='Time'): # Training loop of the model
+    def fit(self, data, sample_cache_max_size=10000000, compatibility_mode=True, item_key='ItemId', session_key='SessionId', time_key='Time', combination=None, ex2vec_path=None, alpha=[0.2]): # Training loop of the model
         self.error_during_train = False # flag for tracking errors during training
 
         self.data_iterator = SessionDataIterator(data, self.batch_size, n_sample=self.n_sample, sample_alpha=self.sample_alpha, sample_cache_max_size=sample_cache_max_size, item_key=item_key, session_key=session_key, time_key=time_key, session_order='time', device=self.device) # iterator to loop over sessionized data
@@ -526,6 +534,42 @@ class GRU4Rec:
 
         opt = IndexedAdagradM(self.model.parameters(), self.learning_rate, self.momentum) # init optimizer
 
+        if combination != None:
+            # load ex2vec model
+            ex2vec_best_param_str = gru4rec_utils.convert_to_param_str('/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI/optim/best_params_ex2vec.json') # fetch current best ex2vec params
+
+            ex2vec_config = OrderedDict([x.split('=') for x in ex2vec_best_param_str.split(',') if "=" in x])
+
+            config = config = {
+                "alias": 'ex2vec_baseline_finaltrain_DEL',
+                "num_epoch": int(ex2vec_config['num_epoch']),
+                "batch_size": int(ex2vec_config['batch_size']),
+                "optimizer": 'adam',
+                "lr": float(ex2vec_config['learning_rate']),
+                "rmsprop_alpha": float(ex2vec_config['rmsprop_alpha']),
+                "momentum": float(ex2vec_config['momentum']),
+                "n_users": 50, # change to 463 - check github
+                "n_items": 682, # change to 879
+                "latent_dim": 64,
+                "num_negative": 0,
+                "l2_regularization": float(ex2vec_config['l2_regularization']),
+                "use_cuda": True,
+                "device_id": 0,
+                "pretrain": True,
+                "pretrain_dir": ex2vec_path,
+                "model_dir": "/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI/models/{}_Epoch{}_f1{:.4f}.pt",
+                "chckpt_dir":"/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI/chckpts/{}_Epoch{}_f1{:.4f}.pt",
+            }
+            ex2vec = Ex2VecEngine(config)
+            ex2vec.model.eval()
+
+            # get copy of global rel ints
+            rel_int_dict = get_rel_int_dict().copy()
+
+        total_batches = len(data) // self.batch_size  # Calculate total number of batches
+        if len(data) % self.batch_size != 0:
+            total_batches += 1
+
         for epoch in range(self.n_epochs): # training loop
             t0 = time.time()
             H = [] # init hidden state for each layer
@@ -538,13 +582,56 @@ class GRU4Rec:
             n_valid = self.batch_size
             reset_hook = lambda n_valid, finished_mask, valid_mask: self._adjust_hidden(n_valid, finished_mask, valid_mask, H) # adjust hidden state when session ends
 
-            for in_idx, out_idx, _, _, _ in self.data_iterator(enable_neg_samples=(self.n_sample>0), reset_hook=reset_hook):
+            pbar = tqdm(total=total_batches, desc=f'Epoch {epoch + 1}/{self.n_epochs}', unit='batch')
+
+            for in_idx, out_idx, userids, _, rel_ints in self.data_iterator(enable_neg_samples=(self.n_sample>0), reset_hook=reset_hook):
                 for h in H: h.detach_() # detach hidden states to avoid gradient accumulation from prev batch
 
                 self.model.zero_grad() # reset grads to avoid accumulation
 
                 # forward pass
-                R = self.model.forward(in_idx, H, out_idx, training=True)
+                R = self.model.forward(in_idx, H, out_idx, training=True) # gives back (batch_size, n_items) tensor
+
+                if combination != None:
+                    # update global rel_int with current listenings
+                    in_idx_ids = gru4rec_utils.get_itemId(self, in_idx.tolist()) # get actual item IDs for songs that are "consumed right now"
+
+                    for item, user, rel_int in zip(in_idx_ids, userids, rel_ints):
+                        # update the global rel_ints dict for the current user-item interaction
+                        rel_int_dict[(user, item)] = rel_int
+
+                    # get the actual item IDs for all next-item preds, flattened
+                    next_item_ids = self.data_iterator.itemidmap.index[np.arange(R.shape[1])].tolist() * R.shape[0] # transform [Index([ID, ID,...]), Index([ID, ID]),...] to [[ID, ID,...], [ID, ID,...],...] -> (batch_size, n_items)
+                    
+                    # expand usersids along their corresponding next-item lists, and flatten them using sum()
+                    expanded_userids = [userid for userid in userids for _ in range(R.shape[1])]
+
+                    # going over both flattened lists, extract relational interval for each user-item interaction
+                    rel_ints = [rel_int_dict.get((user, item), []) for user, item in zip(expanded_userids, next_item_ids)]
+
+                    # pad relational intervals with -1 until it has length 50 (according to ex2vec original code)
+                    padded_rel_ints = []
+                    for rel_int in rel_ints:
+                        rel_int = np.pad(rel_int, (0, 50-len(rel_int)), constant_values=-1)
+                        padded_rel_ints.append(rel_int)
+
+                    # construct model input as tensors and move them to GPU
+                    user_tensor = torch.tensor(expanded_userids).cuda()
+                    item_tensor = torch.tensor(next_item_ids).cuda()
+                    rel_int_tensor = torch.tensor(padded_rel_ints).cuda()
+
+                    # scoring top-k next-item predictions with ex2vec
+                    ex2vec_scores, _ = ex2vec.model(user_tensor, item_tensor, rel_int_tensor)
+                    # split up flattened scores into list of lists again
+                    ex2vec_scores = [ex2vec_scores[i:i+R.shape[1]] for i in range(0,len(ex2vec_scores),R.shape[1])]
+                    # convert recommendation tensors to lists, so we get a list of lists, instead of a list of tensors
+                    ex2vec_scores = [score_tensor.tolist() for score_tensor in ex2vec_scores]
+
+                    # calculate new next-item scores depending on combination with ex2vec
+                    combined_scores = gru4rec_utils.combine_scores(R, ex2vec_scores, alpha, combination) 
+  
+                    # replace old scores with combined ones
+                    R = torch.stack([torch.stack(gru4rec_list) for gru4rec_list in combined_scores[0]])
 
                 # loss per batch / batch_size = avg loss per sample
                 L = self.loss_function(R, out_idx, n_valid) / self.batch_size
@@ -561,6 +648,8 @@ class GRU4Rec:
                     print(str(epoch) + ': NaN error!')
                     self.error_during_train = True
                     return
+
+                pbar.update(1)  # Increment the progress bar by 1 for each batch
                 
             c = np.array(c)
             cc = np.array(cc)

@@ -26,7 +26,10 @@ parser.add_argument('-g', '--gru4rec_model', metavar='GRFILE', type=str, default
 parser.add_argument('-d', '--device', metavar='D', type=str, default='cuda:0', help='Device used for computations (default: cuda:0).')
 parser.add_argument('-ik', '--item_key', metavar='IK', type=str, default='ItemId', help='Column name corresponding to the item IDs (detault: ItemId).')
 parser.add_argument('-sk', '--session_key', metavar='SK', type=str, default='SessionId', help='Column name corresponding to the session IDs (default: SessionId).')
+parser.add_argument('-ex', '--ex2vec_path', type=str, default=None, help='Path to a pre-trained ex2vec model, used as regularization during training (default: None).')
 parser.add_argument('-tk', '--time_key', metavar='TK', type=str, default='Time', help='Column name corresponding to the timestamp (default: Time).')
+parser.add_argument('-c', '--combination', type=str, default=None, help='How the score of ex2vec and gru4rec should be combined (str in [direct, weighted, boosted, mult]) during inference, for no combination it is None (default: None).')
+parser.add_argument('-a', '--alpha', type=float, nargs='+', default=[0.2], help='Alpha value used for combination (only pass one value for training).')
 parser.add_argument('-uk', '--user_key', metavar='UK', type=str, default='userId', help='Column name corresponding to the user ID (default: userId).')
 parser.add_argument('-rk', '--rel_int_key', metavar='RK', type=str, default='relational_interval', help='Column name corresponding to the relational interval (default: relational_interval).')
 parser.add_argument('-pm', '--primary_metric', metavar='METRIC', choices=['recall', 'mrr'], default='recall', help='Set primary metric, recall or mrr (e.g. for paropt). (Default: recall)')
@@ -124,7 +127,7 @@ else: # new model will be created and trained
     data = load_data(args.path, args)
     print('Started training')
     t0 = time.time() # record current start time
-    gru.fit(data, sample_cache_max_size=args.sample_store_size, item_key=args.item_key, session_key=args.session_key, time_key=args.time_key)
+    gru.fit(data, sample_cache_max_size=args.sample_store_size, item_key=args.item_key, session_key=args.session_key, time_key=args.time_key, combination=args.combination, ex2vec_path=args.ex2vec_path, alpha=args.alpha)
     t1 = time.time() # record current end time
     print('Total training time: {:.2f}s'.format(t1 - t0))
     
@@ -143,7 +146,7 @@ if args.test is not None:
         t0 = time.time() # start time for eval
         # evaluate model on test data with specified batch size
         print("Eval batch size: ", gru4rec_params.get('batch_size'))
-        res = evaluation.batch_eval(gru, test_data, batch_size=int(gru4rec_params.get('batch_size')), cutoff=args.measure, mode=args.eval_type, item_key=args.item_key, session_key=args.session_key, time_key=args.time_key)
+        res = evaluation.batch_eval(gru=gru, test_data=test_data, cutoff=args.measure, batch_size=int(gru4rec_params.get('batch_size')), mode=args.eval_type)
         t1 = time.time() # end time for eval
         print('Evaluation took {:.2f}s'.format(t1 - t0))
 
