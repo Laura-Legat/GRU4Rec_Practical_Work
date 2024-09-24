@@ -566,6 +566,11 @@ class GRU4Rec:
             # get copy of global rel ints
             rel_int_dict = get_rel_int_dict().copy()
 
+            # update global rel_int with current listenings
+            for item, user, rel_int in zip(data['itemId'], data['userId'], data['relational_interval']):
+                # update the global rel_ints dict for the current user-item interaction
+                rel_int_dict[(user, item)] = rel_int
+
         total_batches = len(data) // self.batch_size  # Calculate total number of batches
         if len(data) % self.batch_size != 0:
             total_batches += 1
@@ -582,74 +587,52 @@ class GRU4Rec:
             n_valid = self.batch_size
             reset_hook = lambda n_valid, finished_mask, valid_mask: self._adjust_hidden(n_valid, finished_mask, valid_mask, H) # adjust hidden state when session ends
 
-            pbar = tqdm(total=total_batches, desc=f'Epoch {epoch + 1}/{self.n_epochs}', unit='batch')
+            with tqdm(total=total_batches, desc=f'Epoch {epoch + 1}/{self.n_epochs}', unit='batch', ncols=100) as pbar:
+              for in_idx, out_idx, userids, _, rel_ints in self.data_iterator(enable_neg_samples=(self.n_sample>0), reset_hook=reset_hook):
+                  for h in H: h.detach_() # detach hidden states to avoid gradient accumulation from prev batch
 
-            for in_idx, out_idx, userids, _, rel_ints in self.data_iterator(enable_neg_samples=(self.n_sample>0), reset_hook=reset_hook):
-                for h in H: h.detach_() # detach hidden states to avoid gradient accumulation from prev batch
+                  self.model.zero_grad() # reset grads to avoid accumulation
 
-                self.model.zero_grad() # reset grads to avoid accumulation
+                  # forward pass
+                  R = self.model.forward(in_idx, H, out_idx, training=True) # gives back (batch_size, n_items) tensor
 
-                # forward pass
-                R = self.model.forward(in_idx, H, out_idx, training=True) # gives back (batch_size, n_items) tensor
+                  if combination != None:
+                      in_idx_ids = gru4rec_utils.get_itemId(self, in_idx.tolist()) # get actual item IDs for songs that are "consumed right now"
 
-                if combination != None:
-                    # update global rel_int with current listenings
-                    in_idx_ids = gru4rec_utils.get_itemId(self, in_idx.tolist()) # get actual item IDs for songs that are "consumed right now"
+                      # get the actual item IDs for all next-item preds, flattened
+                      next_item_ids = self.data_iterator.itemidmap.index[np.arange(R.shape[1])].tolist() * R.shape[0] # transform [Index([ID, ID,...]), Index([ID, ID]),...] to [[ID, ID,...], [ID, ID,...],...] -> (batch_size, n_items)
 
-                    for item, user, rel_int in zip(in_idx_ids, userids, rel_ints):
-                        # update the global rel_ints dict for the current user-item interaction
-                        rel_int_dict[(user, item)] = rel_int
+                      # expand usersids along their corresponding next-item lists, and flatten them using sum()
+                      expanded_userids = np.repeat(userids, R.shape[1])
 
-                    # get the actual item IDs for all next-item preds, flattened
-                    next_item_ids = self.data_iterator.itemidmap.index[np.arange(R.shape[1])].tolist() * R.shape[0] # transform [Index([ID, ID,...]), Index([ID, ID]),...] to [[ID, ID,...], [ID, ID,...],...] -> (batch_size, n_items)
-                    
-                    # expand usersids along their corresponding next-item lists, and flatten them using sum()
-                    expanded_userids = [userid for userid in userids for _ in range(R.shape[1])]
+                      # going over both flattened lists, extract relational interval for each user-item interaction
+                      rel_ints = [rel_int_dict.get((user, item), []) for user, item in zip(expanded_userids, next_item_ids)]
 
-                    # going over both flattened lists, extract relational interval for each user-item interaction
-                    rel_ints = [rel_int_dict.get((user, item), []) for user, item in zip(expanded_userids, next_item_ids)]
+                      # scoring top-k next-item predictions with ex2vec
+                      ex2vec_scores, _ = ex2vec.model(torch.tensor(expanded_userids, device=self.device), torch.tensor(next_item_ids, device=self.device), torch.tensor(np.array([np.pad(rel_int, (0, 50 - len(rel_int)), constant_values=-1) for rel_int in rel_ints]), device=self.device))
+                      # split up flattened scores into list of lists again
+                      ex2vec_scores = ex2vec_scores.view(R.shape[0], R.shape[1])
 
-                    # pad relational intervals with -1 until it has length 50 (according to ex2vec original code)
-                    padded_rel_ints = []
-                    for rel_int in rel_ints:
-                        rel_int = np.pad(rel_int, (0, 50-len(rel_int)), constant_values=-1)
-                        padded_rel_ints.append(rel_int)
+                      # calculate new next-item scores depending on combination with ex2vec
+                      R = gru4rec_utils.combine_scores(R, ex2vec_scores, alpha, combination).squeeze(0)
 
-                    # construct model input as tensors and move them to GPU
-                    user_tensor = torch.tensor(expanded_userids).cuda()
-                    item_tensor = torch.tensor(next_item_ids).cuda()
-                    rel_int_tensor = torch.tensor(padded_rel_ints).cuda()
+                  # loss per batch / batch_size = avg loss per sample
+                  L = self.loss_function(R, out_idx, n_valid) / self.batch_size
 
-                    # scoring top-k next-item predictions with ex2vec
-                    ex2vec_scores, _ = ex2vec.model(user_tensor, item_tensor, rel_int_tensor)
-                    # split up flattened scores into list of lists again
-                    ex2vec_scores = [ex2vec_scores[i:i+R.shape[1]] for i in range(0,len(ex2vec_scores),R.shape[1])]
-                    # convert recommendation tensors to lists, so we get a list of lists, instead of a list of tensors
-                    ex2vec_scores = [score_tensor.tolist() for score_tensor in ex2vec_scores]
+                  L.backward() # computes grads
+                  opt.step() # update model params using the opimizer
 
-                    # calculate new next-item scores depending on combination with ex2vec
-                    combined_scores = gru4rec_utils.combine_scores(R, ex2vec_scores, alpha, combination) 
-  
-                    # replace old scores with combined ones
-                    R = torch.stack([torch.stack(gru4rec_list) for gru4rec_list in combined_scores[0]])
+                  L = L.cpu().detach().numpy()
+                  c.append(L)
+                  cc.append(n_valid)
 
-                # loss per batch / batch_size = avg loss per sample
-                L = self.loss_function(R, out_idx, n_valid) / self.batch_size
+                  # NaN loss values -> logging the error
+                  if np.isnan(L):
+                      print(str(epoch) + ': NaN error!')
+                      self.error_during_train = True
+                      return
 
-                L.backward() # computes grads
-                opt.step() # update model params using the opimizer
-
-                L = L.cpu().detach().numpy()
-                c.append(L)
-                cc.append(n_valid)
-
-                # NaN loss values -> logging the error
-                if np.isnan(L):
-                    print(str(epoch) + ': NaN error!')
-                    self.error_during_train = True
-                    return
-
-                pbar.update(1)  # Increment the progress bar by 1 for each batch
+                  pbar.update(1)  # Increment the progress bar by 1 for each batch
                 
             c = np.array(c)
             cc = np.array(cc)

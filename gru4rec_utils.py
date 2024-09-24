@@ -1,4 +1,5 @@
 import json
+import torch
 def convert_to_param_str(best_param_path):
   with open(best_param_path, 'r') as f:
     data = json.load(f)
@@ -32,15 +33,22 @@ def combine_scores(gru4rec_scores, ex2vec_scores, alpha_list, mode = 'direct'):
     Returns:
         List of lists of lists of combined score depending on combination mode and alpha -> [[[gruscores(0)&&ex2vecscores(0) for alpha(0)], [gruscores(0)&&ex2vecscores(0) for alpha(1)], ...],  [[gruscores(1)&&ex2vecscores(1) for alpha(0)], [gruscores(1)&&ex2vecscores(1) for alpha(1), ...], ...]
     """
+    # Pre-compute the number of alphas
+    num_alphas = len(alpha_list)
+    # Create a tensor for alphas to avoid repeated tensor creation
+    alphas_tensor = torch.tensor(alpha_list, device=gru4rec_scores.device).view(num_alphas, 1, 1)
+
     if mode == 'direct':
-        return [[ex2vec_score_list for ex2vec_score_list in ex2vec_scores] for alpha in alpha_list]
+        return ex2vec_scores.unsqueeze(0).repeat(num_alphas, 1, 1)
     elif mode == 'weighted':
-        return [[[(alpha * gru4rec_score) + ((1-alpha) * ex2vec_score) for gru4rec_score, ex2vec_score in zip(gru4rec_score_list, ex2vec_score_list)] for gru4rec_score_list, ex2vec_score_list in zip(gru4rec_scores, ex2vec_scores)] for alpha in alpha_list]
+        return (alphas_tensor * gru4rec_scores) + ((1 - alphas_tensor) * ex2vec_scores)
     elif mode == 'boosted':
-        return [[[gru4rec_score + (alpha * ex2vec_score) for gru4rec_score, ex2vec_score in zip(gru4rec_score_list, ex2vec_score_list)] for gru4rec_score_list, ex2vec_score_list in zip(gru4rec_scores, ex2vec_scores)] for alpha in alpha_list]
+        # Use broadcasting for boosting
+        return gru4rec_scores + (alphas_tensor * ex2vec_scores)
     elif mode == 'mult':
-        return [[[gru4rec_score * ex2vec_score for gru4rec_score, ex2vec_score in zip(gru4rec_score_list, ex2vec_score_list)] for gru4rec_score_list, ex2vec_score_list in zip(gru4rec_scores, ex2vec_scores)] for alpha in alpha_list]
-    else: raise NotImplementedError
+        return gru4rec_scores * ex2vec_scores
+    else:
+        raise NotImplementedError
 
 def rerank(gru4rec_items, gru4rec_scores, ex2vec_scores, alpha_list, mode = 'direct'):
     """
