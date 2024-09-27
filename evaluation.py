@@ -43,6 +43,10 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
     if combination != None:
         # get modifiable copy of rel_int_dict
         rel_int_dict = get_rel_int_dict().copy()
+        # update rel int dict once for all inetractions in test data
+        for item, user, rel_int in zip(test_data['itemId'], test_data['userId'], test_data['relational_interval']):
+            rel_int_dict[(user, item)] = rel_int 
+
         for c in cutoff:
             recall[c] = []
             mrr[c] = []
@@ -58,12 +62,9 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
     reset_hook = lambda n_valid, finished_mask, valid_mask: gru._adjust_hidden(n_valid, finished_mask, valid_mask, H)
 
     # prepare dataloader
-    data_iterator = SessionDataIterator(test_data, batch_size, 0, 0, 0, item_key, user_key, session_key, rel_int_key, time_key, device=gru.device, itemidmap=gru.data_iterator.itemidmap)
+    data_iterator = SessionDataIterator(test_data, batch_size, 0, 0, 0, item_key, user_key, session_key, rel_int_key, time_key, device=gru.device, itemidmap=gru.data_iterator.itemidmap) 
 
     n = 0
-    #n_lists = 0
-    #n_intersection = 0
-    #n_same_idx = 0
     for in_idxs, out_idxs, userids, sessionids, rel_ints in data_iterator(enable_neg_samples=False, reset_hook=reset_hook):
         for h in H: h.detach_()
 
@@ -71,70 +72,44 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
 
         if combination != None:
             in_idx_ids = gru4rec_utils.get_itemId(gru, in_idxs.tolist()) # get ids of input items contained in curr batch
-            out_idx_ids = gru4rec_utils.get_itemId(gru, out_idxs.tolist()) # get corresponding targets
 
-            # update rel_ints dict with current, in-session repetitions
-            for item, user, rel_int in zip(in_idx_ids, userids, rel_ints):
-                key = (user, item)
-                rel_int_dict[key] = rel_int  
-
-            top_k_scores, top_indices = torch.topk(O, k, dim=1) # extract top k predicted next items
+            top_k_scores, top_indices = torch.topk(O, k, dim=1) # extract top k predicted next items, (batch_size, k)
             top_k_item_ids = gru4rec_utils.get_itemId(gru, top_indices.tolist()) # convert them from gru4rec indices to item ids which can be used with ex2vec
             top_k_item_ids = [top_k_item_ids[i].tolist() for i in range(len(top_k_item_ids))] # transform [Index([score,score,...]), Index([score, score]),...] to [[score, score,...], [score, score,...],...]
 
-            # expand usersids along recommended item lists, and flatten them using sum()
-            expanded_userids = sum([[userid] * len(items) for userid, items in zip(userids, top_k_item_ids)], [])
             # flatten recommended items to 1d array
-            flattened_top_k_items = sum(top_k_item_ids, [])
+            flattened_top_k_items = np.concatenate(top_k_item_ids)
+
+            # expand usersids along recommended item lists, and flatten them using sum()
+            expanded_userids = np.repeat(userids, k)
 
             # for current user ids and recommended items, extract relational interval from rel_int dict
             rel_ints = [rel_int_dict.get((user, item), []) for user, item in zip(expanded_userids, flattened_top_k_items)]
             # pad relational intervals with -1 until length 50
-            padded_rel_ints = []
-            for rel_int in rel_ints:
-                rel_int = np.pad(rel_int, (0, 50-len(rel_int)), constant_values=-1)
-                padded_rel_ints.append(rel_int)
-
-            # construct model input as tensors and move them to GPU
-            user_tensor = torch.tensor(expanded_userids).cuda()
-            item_tensor = torch.tensor(flattened_top_k_items).cuda()
-            rel_int_tensor = torch.tensor(padded_rel_ints).cuda()
 
             # scoring top-k next-item predictions with ex2vec
-            ex2vec_scores, _ = ex2vec(user_tensor, item_tensor, rel_int_tensor)
+            ex2vec_scores, _ = ex2vec(torch.tensor(expanded_userids).cuda(), torch.tensor(flattened_top_k_items).cuda(), torch.tensor(np.array([np.pad(rel_int, (0, 50-len(rel_int)), constant_values=-1) for rel_int in rel_ints])).cuda())
             # split up flattened scores into list of lists again
             ex2vec_scores = [ex2vec_scores[i:i+k] for i in range(0,len(ex2vec_scores),k)]
+            ex2vec_scores = torch.stack(ex2vec_scores, dim=0) # reorder to tensor
+
             # convert recommendation tensors to lists, so we get a list of lists, instead of a list of tensors
-            ex2vec_scores = [score_tensor.tolist() for score_tensor in ex2vec_scores]
+            #ex2vec_scores = [score_tensor.tolist() for score_tensor in ex2vec_scores]
 
             # reranking based on the score
-            reranked_items_all_alpha = gru4rec_utils.rerank(top_k_item_ids, top_k_scores, ex2vec_scores, alpha_list, combination) # either 879 or top-k
-
-            """
-            # calculate how many items are still in re-ranked list
-            set_orig = set(top_k_item_ids)
-            set_reranked = set(reranked_items)
-            intersection = len(set_orig.intersection(set_reranked))
-            n_intersection += intersection
-            n_lists += len(set_orig)
-
-            # calculate how many items got reranked
-            min_length = min(len(top_k_item_ids), len(reranked_items))
-            same_idx_cnt = sum(1 for i in  range(min_length) if top_k_item_ids[i] == reranked_items[i])
-            n_same_idx += same_idx_cnt
-            """
+            reranked_items_all_alpha = gru4rec_utils.rerank(torch.tensor(np.array(top_k_item_ids)).cuda(), top_k_scores, ex2vec_scores, alpha_list, combination) # either 879 or top-k
             alpha_ranks = [] # store list of lists of ranks per alpha
             for reranked_per_alpha in reranked_items_all_alpha:
                 ranks = []
                 for i, out_idx in enumerate(out_idxs): # loop through [4,5,6]
-                    try:
-                      index = reranked_per_alpha[i].index(out_idx) # retrieve index that out_idx item has in sublist reranked_per_alpha[i]
+                    if out_idx in reranked_per_alpha[i]: # check if first out_idx item is in corresponding first child-tensor
+                      index = (reranked_per_alpha[i] == out_idx).nonzero(as_tuple=True)[0].item() # retrieve index where target item is in subtensor of reranked items
                       ranks.append(index + 1) # if yes, append the index it appears at + 1 to get a rank comparison with the otherwise calculated ranks
-                    except ValueError: # out_idx is not in sublist reranked_per_alpha[i]
+                    else: # out_idx is not in sublist reranked_per_alpha[i]
                       ranks.append(len(reranked_per_alpha[i]) + 1) # if index does not appear, give a rank that is outside of the list length (=invalid rank)
                 alpha_ranks.append(ranks)
 
-            alpha_ranks = torch.tensor(alpha_ranks).cuda()
+            alpha_ranks = torch.tensor(np.array(alpha_ranks)).cuda()
 
             for c in cutoff:
                 recall[c] += [sum([(rank <= c) for rank in rank_list]) for rank_list in alpha_ranks.cpu().numpy().tolist()]
@@ -164,8 +139,3 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
             mrr[c] /= n # avg mrr over all processed batches
     
     return recall, mrr
-    """
-    if combination != None:
-        print("Percentage of original items which are still in the reranked list: ", (n_intersection/n_lists))
-        print("Percentage of original items which are still at the same index in the re-ranked item list: ", (n_same_idx/n_lists))
-    """

@@ -25,15 +25,14 @@ def combine_scores(gru4rec_scores, ex2vec_scores, alpha_list, mode = 'direct'):
     Combines GRU4Rec and Ex2vec scores depending on the combination mode given.
 
     Args:
-        gru4rec_scores: Contains the corresponding scores for the items, list of lists
-        ex2vec_scores: The corresponding scores for each itemin gru4rec_items
+        gru4rec_scores: Contains the corresponding scores for the items -> Tensor (batch_size, n_items) -> tensor([[scores], [scores], [scores], ...])
+        ex2vec_scores: The corresponding scores for each itemin gru4rec_items -> Tensor (batch_size, n_items) -> tensor([[scores], [scores], [scores], ...])
         alpha_list: List of alphas to try. Alpha is a parameter set for weighted/boosted combination of scores, i.e. how much to take each models' predictions into account for the final score
         mode: The combination modality (str in [direct, weighted, boosted, mult])
 
     Returns:
         List of lists of lists of combined score depending on combination mode and alpha -> [[[gruscores(0)&&ex2vecscores(0) for alpha(0)], [gruscores(0)&&ex2vecscores(0) for alpha(1)], ...],  [[gruscores(1)&&ex2vecscores(1) for alpha(0)], [gruscores(1)&&ex2vecscores(1) for alpha(1), ...], ...]
     """
-    # Pre-compute the number of alphas
     num_alphas = len(alpha_list)
     # Create a tensor for alphas to avoid repeated tensor creation
     alphas_tensor = torch.tensor(alpha_list, device=gru4rec_scores.device).view(num_alphas, 1, 1)
@@ -43,10 +42,9 @@ def combine_scores(gru4rec_scores, ex2vec_scores, alpha_list, mode = 'direct'):
     elif mode == 'weighted':
         return (alphas_tensor * gru4rec_scores) + ((1 - alphas_tensor) * ex2vec_scores)
     elif mode == 'boosted':
-        # Use broadcasting for boosting
         return gru4rec_scores + (alphas_tensor * ex2vec_scores)
     elif mode == 'mult':
-        return gru4rec_scores * ex2vec_scores
+        return (gru4rec_scores * ex2vec_scores).repeat(num_alphas, 1, 1)
     else:
         raise NotImplementedError
 
@@ -64,25 +62,20 @@ def rerank(gru4rec_items, gru4rec_scores, ex2vec_scores, alpha_list, mode = 'dir
     Returns:
         reranked_items: List of items in re-ranked order, based on their ex2vec score -> List
     """
-
     # get the new, combined scores for each alpha
     combined_scores= combine_scores(gru4rec_scores, ex2vec_scores, alpha_list, mode)
 
     # define structure for reranked item list
     reranked_items_all_alpha = []
-    for i, alpha in enumerate(alpha_list):
-        reranked_items = []
-        curr_combined_scores = combined_scores[i] # get scores for current alpha
+    for i in range(combined_scores.shape[0]):  # combined_scores shape: (num_alphas, batch_size, k), thus loop through alphas
+        curr_combined_scores = combined_scores[i]  # shape: (batch_size, k)
 
-        for gru4rec_item_list, gru4rec_score_list, ex2vec_score_list, combined_score_list in zip(gru4rec_items, gru4rec_scores, ex2vec_scores, curr_combined_scores): # loop through inner lists
-            # pair each item with its score in inner lists
-            item_score_pairs = list(zip(gru4rec_item_list, combined_score_list)) # [(itemid, score), (itemid, score),...]
+        # sort the next-item combined-score tensors based on their highest score, and extract the index that item had previously
+        sorted_indices = torch.argsort(curr_combined_scores, dim=1, descending=True)
 
-            # sort pairs descendingly based on score value
-            sorted_item_score_pairs = sorted(item_score_pairs, key=lambda x: x[1], reverse=True)
+        # rerank the gru4rec items based on the sorted_indices (highest scores)
+        reranked_items = torch.gather(gru4rec_items, 1, sorted_indices)
 
-            #extract the items from the pairs
-            sorted_items = [item for item, score in sorted_item_score_pairs]
-            reranked_items.append(sorted_items)
+        # add  reranked items for current alpha to the final list
         reranked_items_all_alpha.append(reranked_items)
     return reranked_items_all_alpha

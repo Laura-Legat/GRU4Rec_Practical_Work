@@ -356,7 +356,7 @@ class SessionDataIterator:
         self.data_items = self.itemidmap[data[item_key].values].values # item indices are stored
 
         if n_sample > 0: # negative sampling
-            pop = data.groupby(item_key).size() # calc popularity for each item
+            pop = data.groupby(item_key).size() # how many user-item interactions of each item are in the data
             pop = pop[self.itemidmap.index.values].values**sample_alpha # assigns popularity to indices
             pop = pop.cumsum() / pop.sum() # normalize popularity values -> calc probability for each item that this item is chosen as a negative sample
             pop[-1] = 1
@@ -517,13 +517,14 @@ class GRU4Rec:
         return torch.sum((-torch.log(torch.sum(torch.sigmoid(target_scores-O)*softmax_scores, dim=1)+1e-24)+self.bpreg*torch.sum((O**2)*softmax_scores, dim=1)))
     
     def fit(self, data, sample_cache_max_size=10000000, compatibility_mode=True, item_key='ItemId', session_key='SessionId', time_key='Time', combination=None, ex2vec_path=None, alpha=[0.2]): # Training loop of the model
-        self.error_during_train = False # flag for tracking errors during training
+        self.error_during_train = False # flag for tracking NaN losses during training
 
         self.data_iterator = SessionDataIterator(data, self.batch_size, n_sample=self.n_sample, sample_alpha=self.sample_alpha, sample_cache_max_size=sample_cache_max_size, item_key=item_key, session_key=session_key, time_key=time_key, session_order='time', device=self.device) # iterator to loop over sessionized data
 
+        # logq flag (either 0 or 1) only has effect with cross-entropy loss
         if self.logq and self.loss == 'cross-entropy':
-            pop = data.groupby(item_key).size()
-            self.P0 = torch.tensor(pop[self.data_iterator.itemidmap.index.values], dtype=torch.float32, device=self.device) # compute popularity of items to adjust weight
+            pop = data.groupby(item_key).size() # counts popularity of item by simple counting how many interactions it has
+            self.P0 = torch.tensor(pop[self.data_iterator.itemidmap.index.values], dtype=torch.float32, device=self.device) # make a tensor out of it ready for passing to loss calculation
 
         model = GRU4RecModel(self.data_iterator.n_items, self.layers, self.dropout_p_embed, self.dropout_p_hidden, self.embedding, self.constrained_embedding).to(self.device) # init GRU4Rec model and move to GPU
 
@@ -548,8 +549,8 @@ class GRU4Rec:
                 "lr": float(ex2vec_config['learning_rate']),
                 "rmsprop_alpha": float(ex2vec_config['rmsprop_alpha']),
                 "momentum": float(ex2vec_config['momentum']),
-                "n_users": 50, # change to 463 - check github
-                "n_items": 682, # change to 879
+                "n_users": 5, # change to 463 - check github
+                "n_items": 186, # change to 879
                 "latent_dim": 64,
                 "num_negative": 0,
                 "l2_regularization": float(ex2vec_config['l2_regularization']),
@@ -588,23 +589,27 @@ class GRU4Rec:
             reset_hook = lambda n_valid, finished_mask, valid_mask: self._adjust_hidden(n_valid, finished_mask, valid_mask, H) # adjust hidden state when session ends
 
             with tqdm(total=total_batches, desc=f'Epoch {epoch + 1}/{self.n_epochs}', unit='batch', ncols=100) as pbar:
-              for in_idx, out_idx, userids, _, rel_ints in self.data_iterator(enable_neg_samples=(self.n_sample>0), reset_hook=reset_hook):
+              for in_idx, out_idx, userids, sess_id, rel_ints in self.data_iterator(enable_neg_samples=(self.n_sample>0), reset_hook=reset_hook):
                   for h in H: h.detach_() # detach hidden states to avoid gradient accumulation from prev batch
-
+                  print(gru4rec_utils.get_itemId(self, in_idx.tolist()))
+                  print(gru4rec_utils.get_itemId(self, out_idx.tolist()))
+                  print(userids)
+                  print(sess_id)
+                  print(data)
                   self.model.zero_grad() # reset grads to avoid accumulation
-
                   # forward pass
                   R = self.model.forward(in_idx, H, out_idx, training=True) # gives back (batch_size, n_items) tensor
 
                   if combination != None:
                       in_idx_ids = gru4rec_utils.get_itemId(self, in_idx.tolist()) # get actual item IDs for songs that are "consumed right now"
 
+                      # itemidmap has cols: itemID, itemMapIdx, itemidmap.index gives all item IDs
                       # get the actual item IDs for all next-item preds, flattened
-                      next_item_ids = self.data_iterator.itemidmap.index[np.arange(R.shape[1])].tolist() * R.shape[0] # transform [Index([ID, ID,...]), Index([ID, ID]),...] to [[ID, ID,...], [ID, ID,...],...] -> (batch_size, n_items)
-
+                      next_item_ids = self.data_iterator.itemidmap.index.tolist() * R.shape[0] # transform [Index([ID, ID,...]), Index([ID, ID]),...] to [[ID, ID,...], [ID, ID,...],...] -> (batch_size, n_items)
+                      print(len(next_item_ids))
                       # expand usersids along their corresponding next-item lists, and flatten them using sum()
                       expanded_userids = np.repeat(userids, R.shape[1])
-
+                      print(len(expanded_userids))
                       # going over both flattened lists, extract relational interval for each user-item interaction
                       rel_ints = [rel_int_dict.get((user, item), []) for user, item in zip(expanded_userids, next_item_ids)]
 
