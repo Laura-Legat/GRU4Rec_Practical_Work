@@ -67,23 +67,14 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
     n = 0
     for in_idxs, out_idxs, userids, sessionids, rel_ints, _ in data_iterator(enable_neg_samples=False, reset_hook=reset_hook):
         for h in H: h.detach_()
-        #print('in_idx: ', in_idxs)
-        #print('out_idx: ', out_idxs)
-        #print('userids: ', userids)
-        #print('sessionids: ', sessionids)
 
         O = gru.model.forward(in_idxs, H, None, training=False) # for each item in in_idxs, calcuate a next-item probability for all items in the whole dataset (batch_size, n_all_items), e.g. (50, 879) or (10,879)
 
         if combination != None:
             top_k_scores, top_indices = torch.topk(O, k, dim=1) # extract top k predicted next items, (batch_size, k)
-            #print('top_indices', top_indices)
-            #top_k_item_ids = gru4rec_utils.get_itemId(gru, top_indices.tolist()) # convert them from gru4rec indices to item ids which can be used with ex2vec
-            #top_k_item_ids = [top_k_item_ids[i].tolist() for i in range(len(top_k_item_ids))] # transform [Index([score,score,...]), Index([score, score]),...] to [[score, score,...], [score, score,...],...]
 
             # flatten recommended items to 1d array
             flattened_top_k_items = top_indices.view(-1).cpu().numpy() #batch_size * k
-            #print('flat topk: ', flattened_top_k_items)
-            #print(len(flattened_top_k_items))
 
             # expand usersids along recommended item lists, and flatten them using sum()
             expanded_userids = np.repeat(userids, k)
