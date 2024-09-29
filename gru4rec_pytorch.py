@@ -202,32 +202,32 @@ class GRU4RecModel(nn.Module):
         self.Wy.weight.set_(torch.tensor(self._init_numpy_weights((self.n_items, self.layers[-1])), device=self.Wy.weight.device))
         self.By.weight.set_(torch.zeros((self.n_items, 1), device=self.By.weight.device))
     def embed_constrained(self, X, Y=None):
-        if Y is not None:
-            XY = torch.cat([X, Y])
-            EXY = self.Wy(XY) # if Y is provided, compute embeddings for concat version and split them into X and Y embeds again after
-            split = X.shape[0]
-            E = EXY[:split] # embedding for X
-            O = EXY[split:] # embedding for Y
-            B = self.By(Y) # bias for Y
-        else:
+        if Y is not None: #training
+            XY = torch.cat([X, Y]) # concatinate in_idx and out_idx -> shape (batch_size + (batch_size+n_sample))
+            EXY = self.Wy(XY) # retrieve item embds for concat version of in_idx and out_idx (batch_size + (batch_size+n_sample), emb_dim)
+            split = X.shape[0] # define a split point for splitting them according to X and Y shapes again
+            E = EXY[:split] # embedding for X/in_idx -> (batch_size, emb_dim)
+            O = EXY[split:] # embedding for Y/out_idx -> (batch_size + n_sample, emb_dim)
+            B = self.By(Y) # bias for Y/out_idx -> (batch_size + n_sample, 1)
+        else: # eval
             E = self.Wy(X) # compute embeddings for X
             O = self.Wy.weight # weights for X
             B = self.By.weight # bias for X
         return E, O, B
     def embed_separate(self, X, Y=None):
         E = self.E(X) # embeds for X
-        if Y is not None:
-            O = self.Wy(Y) # embeds for Y
-            B = self.By(Y) # biases for Y
-        else:
+        if Y is not None: # training
+            O = self.Wy(Y) # embeds for Y -> (batch_size+n_sample, emb_dim)
+            B = self.By(Y) # biases for Y -> (batch_size + n_sample, 1)
+        else: #eval
             O = self.Wy.weight # embeds for all items
             B = self.By.weight # bias for all items
         return E, O, B
     def embed_gru(self, X, H, Y=None):
         E = self.GE(X, H) # embeds for X
         if Y is not None:
-            O = self.Wy(Y) # embeds for Y
-            B = self.By(Y) # biases for Y
+            O = self.Wy(Y) # embeds for Y -> (batch_size+n_sample, emb_dim)
+            B = self.By(Y) # biases for Y -> (batch_size + n_sample, 1)
         else:
             O = self.Wy.weight # embedding weights for all items = X
             B = self.By.weight # biases for all items
@@ -247,16 +247,16 @@ class GRU4RecModel(nn.Module):
             H: Hidden state tensor, one hidden state for each GRU layer
             training: If model is in training mode or not
         """
-        for i in range(self.start, len(self.layers)): # iterate over GRU layers
-            X = self.G[i](X, Variable(H[i])) # pass input x_t and hidden state through GRU cell, X is new hidden state
+        for i in range(self.start, len(self.layers)): # iterate over GRU layer (there is only 1)
+            X = self.G[i](X, Variable(H[i])) # pass input x_t and hidden state through GRU cell
 
             if training:
-                X = self.D[i](X)
+                X = self.D[i](X) # pass input through dropout, set some values to 0
 
-            H[i] = X # update hidden state of layer i
+            H[i] = X # store new hidden state (X which GRU returns) back into H[i], updating the hidden state for layer i 
         return X
     def score_items(self, X, O, B):
-        O = torch.mm(X, O.T) + B.T
+        O = torch.mm(X, O.T) + B.T # X * H + Y (batch_size, emb_dim) * (emb_dim, batch_size + n_sample) = (batch_size, batch_size+n_sample) + (1, batch_size+n_sample) = (batch_size, batch_size+n_sample)
         return O
     
     def forward(self, X, H, Y, training=False):
@@ -264,15 +264,15 @@ class GRU4RecModel(nn.Module):
         Embedding -> Dropout Embd -> Pass through GRU layers -> scoring
 
         Args:
-            X: Input tensor, item indices
+            X: Input tensor, in_idxs
             H: Hidden state tensor
-            Y: Target tensor, target item indices
+            Y: Target tensor, target item indices, out_idxs
             training: If model is in training mode or not
         """
         E, O, B = self.embed(X, H, Y)
 
         if training: 
-            E = self.DE(E) # dropout - set some of emb values to 0 during training
+            E = self.DE(E) # dropout - set some of embedding values of in_idx to 0 during training
 
         if not (self.constrained_embedding or self.embedding):
             H[0] = E
@@ -315,7 +315,6 @@ class SampleCache:
 class SessionDataIterator:
     def __init__(self, data, batch_size, n_sample=0, sample_alpha=0.75, sample_cache_max_size=10000000, item_key='ItemId', user_key = 'userId', session_key='SessionId', rel_int_key="relational_interval", time_key='Time', session_order='time', device=torch.device('cuda:0'), itemidmap=None):
         """
-        
         Args:
             data: Sessionized input dataset -> Pandas DataFrame
             batch_size: Desired batch size to be used during training -> int
@@ -327,11 +326,17 @@ class SessionDataIterator:
         """
         self.device = device
         self.batch_size = batch_size
+
+        # map userids according to ex2vec
+        userids = data['userId'].unique()
+        user_mapping = pd.Series(data=np.arange(len(userids), dtype='int32'), index=userids, name='userIdx')
+        data['userId'] = data['userId'].map(user_mapping)
+
         self.data = data
 
         if itemidmap is None:
             print('Creating new item ID map')
-            itemids = data[item_key].unique() # extract number of unique item IDs
+            itemids = data[item_key].unique() # array of unique item IDs
             self.n_items = len(itemids) # counts total amount of unique items in data
             # create mapping between item IDs and indices
             self.itemidmap = pd.Series(data=np.arange(self.n_items, dtype='int32'), index=itemids, name='ItemIdx') # map item IDs to indices from 0 to self.n_items - 1; index=itemids associates each index with corresponding item ID
@@ -344,8 +349,7 @@ class SessionDataIterator:
             if n_not_in > 0:
                 #print('{} rows of the data contain unknown items and will be filtered'.format(n_not_in))
                 data = data.drop(data.index[~in_mask])
-
-        self.sort_if_needed(data, [session_key]) # sort by session and time keys
+        self.sort_if_needed(data, [session_key]) # sort by session key
         self.offset_sessions = self.compute_offset(data, session_key) # calculate starting indices of each session
 
         if session_order == 'time':
@@ -412,17 +416,19 @@ class SessionDataIterator:
                 curr_users = []
                 curr_sessions = []
                 curr_rel_ints = []
-                for j in range(n_valid):
+                for j in range(n_valid): #for j in batch_size
                     curr_users.append(self.data.iloc[start[j]]['userId'])
                     curr_sessions.append(self.data.iloc[start[j]]['SessionId'])
                     curr_rel_ints.append(self.data.iloc[start[j]]['relational_interval'])
 
                 if enable_neg_samples:
-                    sample = self.sample_cache.get_sample()
-                    y = torch.cat([out_idx, sample])
+                    sample = self.sample_cache.get_sample() # Tensor -> (n_sample), sample n_sample item IDs
+                    y_positive = out_idx # store positive samples (batch_size)
+                    y = torch.cat([out_idx, sample]) # out_idx -> (batch_size + n_sample)
                 else:
+                    y_positive = out_idx
                     y = out_idx
-                yield in_idx, y, curr_users, curr_sessions, curr_rel_ints
+                yield in_idx, y, curr_users, curr_sessions, curr_rel_ints, y_positive
             start = start+minlen-1
             finished_mask = (end-start<=1)
             n_finished = finished_mask.sum()
@@ -494,7 +500,10 @@ class GRU4Rec:
         if self.embedding == 'layersize':
             self.embedding = self.layers[0]
             print('SET   {}{}TO   {}{}(type: {})'.format('embedding', ' '*(maxk_len-len('embedding')+3), getattr(self, 'embedding'), ' '*(maxv_len-len(str(getattr(self, 'embedding')))+3), type(getattr(self, 'embedding'))))
-    def xe_loss_with_softmax(self, O, Y, M):
+    def xe_loss_with_softmax(self, O, Y, M): # cross-entropy
+        """
+        R, out_idx, n_valid
+        """
         if self.logq > 0:
             O = O - self.logq * torch.log(torch.cat([self.P0[Y[:M]], self.P0[Y[M:]]**self.sample_alpha]))
         X = torch.exp(O - O.max(dim=1, keepdim=True)[0])
@@ -506,7 +515,7 @@ class GRU4Rec:
         e_x = torch.exp(X - X.max(dim=1, keepdim=True)[0]) * hm
         return e_x / e_x.sum(dim=1, keepdim=True)
 
-    def bpr_max_loss_with_elu(self, O, Y, M):
+    def bpr_max_loss_with_elu(self, O, Y, M): #bpr-max
         if self.elu_param > 0:
             O = nn.functional.elu(O, self.elu_param)
         softmax_scores = self.softmax_neg(O)
@@ -520,7 +529,6 @@ class GRU4Rec:
         self.error_during_train = False # flag for tracking NaN losses during training
 
         self.data_iterator = SessionDataIterator(data, self.batch_size, n_sample=self.n_sample, sample_alpha=self.sample_alpha, sample_cache_max_size=sample_cache_max_size, item_key=item_key, session_key=session_key, time_key=time_key, session_order='time', device=self.device) # iterator to loop over sessionized data
-
         # logq flag (either 0 or 1) only has effect with cross-entropy loss
         if self.logq and self.loss == 'cross-entropy':
             pop = data.groupby(item_key).size() # counts popularity of item by simple counting how many interactions it has
@@ -550,7 +558,7 @@ class GRU4Rec:
                 "rmsprop_alpha": float(ex2vec_config['rmsprop_alpha']),
                 "momentum": float(ex2vec_config['momentum']),
                 "n_users": 5, # change to 463 - check github
-                "n_items": 186, # change to 879
+                "n_items": 146, # change to 879
                 "latent_dim": 64,
                 "num_negative": 0,
                 "l2_regularization": float(ex2vec_config['l2_regularization']),
@@ -589,37 +597,21 @@ class GRU4Rec:
             reset_hook = lambda n_valid, finished_mask, valid_mask: self._adjust_hidden(n_valid, finished_mask, valid_mask, H) # adjust hidden state when session ends
 
             with tqdm(total=total_batches, desc=f'Epoch {epoch + 1}/{self.n_epochs}', unit='batch', ncols=100) as pbar:
-              for in_idx, out_idx, userids, sess_id, rel_ints in self.data_iterator(enable_neg_samples=(self.n_sample>0), reset_hook=reset_hook):
+              for in_idx, out_idx, userids, sess_id, rel_ints, next_positive in self.data_iterator(enable_neg_samples=(self.n_sample>0), reset_hook=reset_hook):
                   for h in H: h.detach_() # detach hidden states to avoid gradient accumulation from prev batch
-                  print(gru4rec_utils.get_itemId(self, in_idx.tolist()))
-                  print(gru4rec_utils.get_itemId(self, out_idx.tolist()))
-                  print(userids)
-                  print(sess_id)
-                  print(data)
-                  self.model.zero_grad() # reset grads to avoid accumulation
-                  # forward pass
-                  R = self.model.forward(in_idx, H, out_idx, training=True) # gives back (batch_size, n_items) tensor
+
+                  self.model.zero_grad() 
+                  R = self.model.forward(in_idx, H, out_idx, training=True) # -> (batch_size, batch_size + n_sample)
 
                   if combination != None:
-                      in_idx_ids = gru4rec_utils.get_itemId(self, in_idx.tolist()) # get actual item IDs for songs that are "consumed right now"
-
-                      # itemidmap has cols: itemID, itemMapIdx, itemidmap.index gives all item IDs
-                      # get the actual item IDs for all next-item preds, flattened
-                      next_item_ids = self.data_iterator.itemidmap.index.tolist() * R.shape[0] # transform [Index([ID, ID,...]), Index([ID, ID]),...] to [[ID, ID,...], [ID, ID,...],...] -> (batch_size, n_items)
-                      print(len(next_item_ids))
-                      # expand usersids along their corresponding next-item lists, and flatten them using sum()
-                      expanded_userids = np.repeat(userids, R.shape[1])
-                      print(len(expanded_userids))
-                      # going over both flattened lists, extract relational interval for each user-item interaction
-                      rel_ints = [rel_int_dict.get((user, item), []) for user, item in zip(expanded_userids, next_item_ids)]
+                      rel_ints_next = [rel_int_dict.get((user, item), []) for user, item in zip(userids, next_positive.tolist())]
 
                       # scoring top-k next-item predictions with ex2vec
-                      ex2vec_scores, _ = ex2vec.model(torch.tensor(expanded_userids, device=self.device), torch.tensor(next_item_ids, device=self.device), torch.tensor(np.array([np.pad(rel_int, (0, 50 - len(rel_int)), constant_values=-1) for rel_int in rel_ints]), device=self.device))
-                      # split up flattened scores into list of lists again
-                      ex2vec_scores = ex2vec_scores.view(R.shape[0], R.shape[1])
+                      ex2vec_scores, _ = ex2vec.model(torch.tensor(np.array(userids), device=self.device), next_positive.to(self.device), torch.tensor(np.array([np.pad(rel_int, (0, 50 - len(rel_int)), constant_values=-1) for rel_int in rel_ints_next]), device=self.device))
+                      ex2vec_scores_aligned = ex2vec_scores.repeat(R.shape[0], 1)
 
                       # calculate new next-item scores depending on combination with ex2vec
-                      R = gru4rec_utils.combine_scores(R, ex2vec_scores, alpha, combination).squeeze(0)
+                      R = gru4rec_utils.combine_scores(R, ex2vec_scores_aligned, alpha, combination).squeeze(0)
 
                   # loss per batch / batch_size = avg loss per sample
                   L = self.loss_function(R, out_idx, n_valid) / self.batch_size

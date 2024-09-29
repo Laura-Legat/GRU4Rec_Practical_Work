@@ -2,11 +2,10 @@ from gru4rec_pytorch import SessionDataIterator
 import torch
 import sys
 sys.path.append('/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI')
-from data_sampler import get_rel_int_dict
+from data_sampler import get_rel_int_dict, get_userId_from_mapping, get_itemId_from_mapping
 import numpy as np
 import gru4rec_utils
 import importlib
-importlib.reload(gru4rec_utils)
 
 @torch.no_grad() # disable grad computation for this function
 def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', item_key='itemId', user_key='userId', rel_int_key='relational_interval', session_key='SessionId', time_key='timestamp', combination=None, k=10, ex2vec=None, alpha_list=[0.5]):
@@ -33,6 +32,7 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
         ex2vec: Trained Ex2Vec model for scoring gru4rec's top-k items, if no combination then it is None
         alpha_list: Parameter list set for weighted/boosted combination of scores, i.e. how much to take each models' predictions into account for the final score -> List
     """
+    print(test_data)
     if gru.error_during_train: 
         raise Exception('Attempting to evaluate a model that wasn\'t trained properly (error_during_train=True)')
     
@@ -62,23 +62,28 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
     reset_hook = lambda n_valid, finished_mask, valid_mask: gru._adjust_hidden(n_valid, finished_mask, valid_mask, H)
 
     # prepare dataloader
-    data_iterator = SessionDataIterator(test_data, batch_size, 0, 0, 0, item_key, user_key, session_key, rel_int_key, time_key, device=gru.device, itemidmap=gru.data_iterator.itemidmap) 
-
+    data_iterator = SessionDataIterator(test_data, batch_size, 0, 0, 0, item_key=item_key, user_key=user_key, session_key=session_key, rel_int_key = rel_int_key, time_key=time_key, device=gru.device, itemidmap=gru.data_iterator.itemidmap) 
+    
     n = 0
-    for in_idxs, out_idxs, userids, sessionids, rel_ints in data_iterator(enable_neg_samples=False, reset_hook=reset_hook):
+    for in_idxs, out_idxs, userids, sessionids, rel_ints, _ in data_iterator(enable_neg_samples=False, reset_hook=reset_hook):
         for h in H: h.detach_()
+        #print('in_idx: ', in_idxs)
+        #print('out_idx: ', out_idxs)
+        #print('userids: ', userids)
+        #print('sessionids: ', sessionids)
 
         O = gru.model.forward(in_idxs, H, None, training=False) # for each item in in_idxs, calcuate a next-item probability for all items in the whole dataset (batch_size, n_all_items), e.g. (50, 879) or (10,879)
 
         if combination != None:
-            in_idx_ids = gru4rec_utils.get_itemId(gru, in_idxs.tolist()) # get ids of input items contained in curr batch
-
             top_k_scores, top_indices = torch.topk(O, k, dim=1) # extract top k predicted next items, (batch_size, k)
-            top_k_item_ids = gru4rec_utils.get_itemId(gru, top_indices.tolist()) # convert them from gru4rec indices to item ids which can be used with ex2vec
-            top_k_item_ids = [top_k_item_ids[i].tolist() for i in range(len(top_k_item_ids))] # transform [Index([score,score,...]), Index([score, score]),...] to [[score, score,...], [score, score,...],...]
+            #print('top_indices', top_indices)
+            #top_k_item_ids = gru4rec_utils.get_itemId(gru, top_indices.tolist()) # convert them from gru4rec indices to item ids which can be used with ex2vec
+            #top_k_item_ids = [top_k_item_ids[i].tolist() for i in range(len(top_k_item_ids))] # transform [Index([score,score,...]), Index([score, score]),...] to [[score, score,...], [score, score,...],...]
 
             # flatten recommended items to 1d array
-            flattened_top_k_items = np.concatenate(top_k_item_ids)
+            flattened_top_k_items = top_indices.view(-1).cpu().numpy() #batch_size * k
+            #print('flat topk: ', flattened_top_k_items)
+            #print(len(flattened_top_k_items))
 
             # expand usersids along recommended item lists, and flatten them using sum()
             expanded_userids = np.repeat(userids, k)
@@ -87,17 +92,16 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
             rel_ints = [rel_int_dict.get((user, item), []) for user, item in zip(expanded_userids, flattened_top_k_items)]
             # pad relational intervals with -1 until length 50
 
+            #print('expanded userids: ', expanded_userids)
+
             # scoring top-k next-item predictions with ex2vec
             ex2vec_scores, _ = ex2vec(torch.tensor(expanded_userids).cuda(), torch.tensor(flattened_top_k_items).cuda(), torch.tensor(np.array([np.pad(rel_int, (0, 50-len(rel_int)), constant_values=-1) for rel_int in rel_ints])).cuda())
             # split up flattened scores into list of lists again
             ex2vec_scores = [ex2vec_scores[i:i+k] for i in range(0,len(ex2vec_scores),k)]
             ex2vec_scores = torch.stack(ex2vec_scores, dim=0) # reorder to tensor
 
-            # convert recommendation tensors to lists, so we get a list of lists, instead of a list of tensors
-            #ex2vec_scores = [score_tensor.tolist() for score_tensor in ex2vec_scores]
-
             # reranking based on the score
-            reranked_items_all_alpha = gru4rec_utils.rerank(torch.tensor(np.array(top_k_item_ids)).cuda(), top_k_scores, ex2vec_scores, alpha_list, combination) # either 879 or top-k
+            reranked_items_all_alpha = gru4rec_utils.rerank(top_indices.cuda(), top_k_scores, ex2vec_scores, alpha_list, combination) # either 879 or top-k
             alpha_ranks = [] # store list of lists of ranks per alpha
             for reranked_per_alpha in reranked_items_all_alpha:
                 ranks = []
@@ -117,7 +121,6 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
         else:
             oscores = O.T # (879,50)
             tscores = torch.diag(oscores[out_idxs]) # select scores of the true next item (out_idx)
-            #oscores = top_k_scores.T
 
             if mode == 'standard': ranks = (oscores > tscores).sum(dim=0) + 1 # calculates how many of the 879 item scores (for one particular in_idx) have scored higher than the corresponding true item (corresponding out_idx) + 1 for actual placement (1st place instead of 0th place)
             elif mode == 'conservative': ranks = (oscores >= tscores).sum(dim=0)

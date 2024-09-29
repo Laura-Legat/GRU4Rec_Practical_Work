@@ -33,20 +33,33 @@ def combine_scores(gru4rec_scores, ex2vec_scores, alpha_list, mode = 'direct'):
     Returns:
         List of lists of lists of combined score depending on combination mode and alpha -> [[[gruscores(0)&&ex2vecscores(0) for alpha(0)], [gruscores(0)&&ex2vecscores(0) for alpha(1)], ...],  [[gruscores(1)&&ex2vecscores(1) for alpha(0)], [gruscores(1)&&ex2vecscores(1) for alpha(1), ...], ...]
     """
+    #check for enabled negative sampling
+    n_sample = gru4rec_scores.shape[1] - ex2vec_scores.shape[1]
+
+    if n_sample > 0:
+        gru4rec_scores_positive = gru4rec_scores[:, :ex2vec_scores.shape[1]] # slice off positive samples -> (batch_size, batch_size)
+        gru4rec_scores_negative = gru4rec_scores[:, ex2vec_scores.shape[1]:] # slice off negative samples
+        gru4rec_scores = gru4rec_scores_positive # enable combination only between positive scores and ex2vec scores
+
     num_alphas = len(alpha_list)
     # Create a tensor for alphas to avoid repeated tensor creation
     alphas_tensor = torch.tensor(alpha_list, device=gru4rec_scores.device).view(num_alphas, 1, 1)
 
     if mode == 'direct':
-        return ex2vec_scores.unsqueeze(0).repeat(num_alphas, 1, 1)
+        combined_scores = ex2vec_scores.unsqueeze(0).repeat(num_alphas, 1, 1)
     elif mode == 'weighted':
-        return (alphas_tensor * gru4rec_scores) + ((1 - alphas_tensor) * ex2vec_scores)
+        combined_scores = (alphas_tensor * gru4rec_scores) + ((1 - alphas_tensor) * ex2vec_scores)
     elif mode == 'boosted':
-        return gru4rec_scores + (alphas_tensor * ex2vec_scores)
+        combined_scores = gru4rec_scores + (alphas_tensor * ex2vec_scores)
     elif mode == 'mult':
-        return (gru4rec_scores * ex2vec_scores).repeat(num_alphas, 1, 1)
+        combined_scores = (gru4rec_scores * ex2vec_scores).repeat(num_alphas, 1, 1)
     else:
         raise NotImplementedError
+    
+    if n_sample > 0:
+        return torch.cat([combined_scores, gru4rec_scores_negative.unsqueeze(0).repeat(num_alphas, 1, 1)], dim=2) #concat combined positive scores back with old negative scores
+    else:
+        return combined_scores
 
 def rerank(gru4rec_items, gru4rec_scores, ex2vec_scores, alpha_list, mode = 'direct'):
     """
