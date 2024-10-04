@@ -601,7 +601,7 @@ class GRU4Rec:
                   for h in H: h.detach_() # detach hidden states to avoid gradient accumulation from prev batch
 
                   self.model.zero_grad() 
-                  R = self.model.forward(in_idx, H, out_idx, training=True) # -> (batch_size, batch_size + n_sample)
+                  R = self.model.forward(in_idx, H, out_idx, training=True) # -> (batch_size, batch_size + negative_sample)
 
                   if combination != None:
                       rel_ints_next = [rel_int_dict.get((user, item), []) for user, item in zip(userids, next_positive.tolist())]

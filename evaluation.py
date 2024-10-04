@@ -69,6 +69,7 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
         for h in H: h.detach_()
 
         O = gru.model.forward(in_idxs, H, None, training=False) # for each item in in_idxs, calcuate a next-item probability for all items in the whole dataset (batch_size, n_all_items), e.g. (50, 879) or (10,879)
+        print('GRU4Rec scores eval: ', O)
 
         if combination != None:
             top_k_scores, top_indices = torch.topk(O, k, dim=1) # extract top k predicted next items, (batch_size, k)
@@ -87,6 +88,7 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
 
             # scoring top-k next-item predictions with ex2vec
             ex2vec_scores, _ = ex2vec(torch.tensor(expanded_userids).cuda(), torch.tensor(flattened_top_k_items).cuda(), torch.tensor(np.array([np.pad(rel_int, (0, 50-len(rel_int)), constant_values=-1) for rel_int in rel_ints])).cuda())
+            print('Ex2vec scores eval: ', ex2vec_scores)
             # split up flattened scores into list of lists again
             ex2vec_scores = [ex2vec_scores[i:i+k] for i in range(0,len(ex2vec_scores),k)]
             ex2vec_scores = torch.stack(ex2vec_scores, dim=0) # reorder to tensor
