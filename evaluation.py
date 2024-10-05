@@ -1,10 +1,10 @@
-from gru4rec_pytorch import SessionDataIterator
+from GRU4Rec_Fork.gru4rec_pytorch import SessionDataIterator
 import torch
 import sys
-sys.path.append('/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI')
+#sys.path.append('/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI')
 from data_sampler import get_rel_int_dict, get_userId_from_mapping, get_itemId_from_mapping
 import numpy as np
-import gru4rec_utils
+from GRU4Rec_Fork import gru4rec_utils
 import importlib
 
 @torch.no_grad() # disable grad computation for this function

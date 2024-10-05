@@ -7,9 +7,9 @@ from torch.autograd import Variable
 from collections import OrderedDict
 import time
 import os
-import gru4rec_utils
+from GRU4Rec_Fork import gru4rec_utils
 import sys
-sys.path.append('/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI')
+#sys.path.append('/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI')
 from data_sampler import get_rel_int_dict
 from ex2vec import Ex2VecEngine
 from tqdm import tqdm
