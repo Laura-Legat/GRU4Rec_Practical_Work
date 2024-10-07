@@ -1,11 +1,11 @@
-from GRU4Rec_Fork.gru4rec_pytorch import SessionDataIterator
 import torch
 import sys
+import numpy as np
+import importlib
+from gru4rec_pytorch import SessionDataIterator
 #sys.path.append('/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI')
 from data_sampler import get_rel_int_dict, get_userId_from_mapping, get_itemId_from_mapping
-import numpy as np
-from GRU4Rec_Fork import gru4rec_utils
-import importlib
+import gru4rec_utils
 
 @torch.no_grad() # disable grad computation for this function
 def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', item_key='itemId', user_key='userId', rel_int_key='relational_interval', session_key='SessionId', time_key='timestamp', combination=None, k=10, ex2vec=None, alpha_list=[0.5]):
@@ -32,7 +32,6 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
         ex2vec: Trained Ex2Vec model for scoring gru4rec's top-k items, if no combination then it is None
         alpha_list: Parameter list set for weighted/boosted combination of scores, i.e. how much to take each models' predictions into account for the final score -> List
     """
-    print(test_data)
     if gru.error_during_train: 
         raise Exception('Attempting to evaluate a model that wasn\'t trained properly (error_during_train=True)')
     
@@ -69,7 +68,7 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
         for h in H: h.detach_()
 
         O = gru.model.forward(in_idxs, H, None, training=False) # for each item in in_idxs, calcuate a next-item probability for all items in the whole dataset (batch_size, n_all_items), e.g. (50, 879) or (10,879)
-        print('GRU4Rec scores eval: ', O)
+        #print('GRU4Rec scores eval: ', O)
 
         if combination != None:
             top_k_scores, top_indices = torch.topk(O, k, dim=1) # extract top k predicted next items, (batch_size, k)
@@ -82,13 +81,11 @@ def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', 
 
             # for current user ids and recommended items, extract relational interval from rel_int dict
             rel_ints = [rel_int_dict.get((user, item), []) for user, item in zip(expanded_userids, flattened_top_k_items)]
-            # pad relational intervals with -1 until length 50
-
-            #print('expanded userids: ', expanded_userids)
 
             # scoring top-k next-item predictions with ex2vec
             ex2vec_scores, _ = ex2vec(torch.tensor(expanded_userids).cuda(), torch.tensor(flattened_top_k_items).cuda(), torch.tensor(np.array([np.pad(rel_int, (0, 50-len(rel_int)), constant_values=-1) for rel_int in rel_ints])).cuda())
-            print('Ex2vec scores eval: ', ex2vec_scores)
+            #print('Ex2vec scores eval: ', ex2vec_scores)
+            
             # split up flattened scores into list of lists again
             ex2vec_scores = [ex2vec_scores[i:i+k] for i in range(0,len(ex2vec_scores),k)]
             ex2vec_scores = torch.stack(ex2vec_scores, dim=0) # reorder to tensor

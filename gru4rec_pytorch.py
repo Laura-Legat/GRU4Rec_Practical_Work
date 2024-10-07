@@ -7,12 +7,10 @@ from torch.autograd import Variable
 from collections import OrderedDict
 import time
 import os
-from GRU4Rec_Fork import gru4rec_utils
 import sys
-#sys.path.append('/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI')
-from data_sampler import get_rel_int_dict
-from ex2vec import Ex2VecEngine
 from tqdm import tqdm
+from GRU4Rec_Fork import gru4rec_utils
+from data_sampler import get_rel_int_dict
 
 
 from torch.optim import Optimizer
@@ -313,7 +311,7 @@ class SampleCache:
         return sample
 
 class SessionDataIterator:
-    def __init__(self, data, batch_size, n_sample=0, sample_alpha=0.75, sample_cache_max_size=10000000, item_key='ItemId', user_key = 'userId', session_key='SessionId', rel_int_key="relational_interval", time_key='Time', session_order='time', device=torch.device('cuda:0'), itemidmap=None):
+    def __init__(self, data, batch_size, n_sample=0, sample_alpha=0.75, sample_cache_max_size=10000000, item_key='ItemId', user_key = 'userId', session_key='SessionId', rel_int_key="relational_interval", time_key='Time', session_order='sequential', device=torch.device('cuda:0'), itemidmap=None):
         """
         Args:
             data: Sessionized input dataset -> Pandas DataFrame
@@ -398,7 +396,7 @@ class SessionDataIterator:
 
     def __call__(self, enable_neg_samples, reset_hook=None):
         batch_size = self.batch_size
-        iters = np.arange(batch_size)
+        iters = np.arange(batch_size) # len batch_size
         maxiter = iters.max()
         start = self.offset_sessions[self.session_idx_arr[iters]]
         end = self.offset_sessions[self.session_idx_arr[iters]+1]
@@ -525,10 +523,10 @@ class GRU4Rec:
         # BPR formula(?) pp. 5 in gru4rec paper + term for stabilization (1e-24) + regularization term +self.bpreg*torch.sum((O**2)*softmax_scores, dim=1)
         return torch.sum((-torch.log(torch.sum(torch.sigmoid(target_scores-O)*softmax_scores, dim=1)+1e-24)+self.bpreg*torch.sum((O**2)*softmax_scores, dim=1)))
     
-    def fit(self, data, sample_cache_max_size=10000000, compatibility_mode=True, item_key='ItemId', session_key='SessionId', time_key='Time', combination=None, ex2vec_path=None, alpha=[0.2]): # Training loop of the model
+    def fit(self, data, sample_cache_max_size=10000000, compatibility_mode=True, item_key='ItemId', session_key='SessionId', time_key='Time', combination=None, ex2vec=None, alpha=[0.2], save_path=None): # Training loop of the model
         self.error_during_train = False # flag for tracking NaN losses during training
 
-        self.data_iterator = SessionDataIterator(data, self.batch_size, n_sample=self.n_sample, sample_alpha=self.sample_alpha, sample_cache_max_size=sample_cache_max_size, item_key=item_key, session_key=session_key, time_key=time_key, session_order='time', device=self.device) # iterator to loop over sessionized data
+        self.data_iterator = SessionDataIterator(data, self.batch_size, n_sample=self.n_sample, sample_alpha=self.sample_alpha, sample_cache_max_size=sample_cache_max_size, item_key=item_key, session_key=session_key, time_key=time_key, session_order='sequential', device=self.device) # iterator to loop over sessionized data
         # logq flag (either 0 or 1) only has effect with cross-entropy loss
         if self.logq and self.loss == 'cross-entropy':
             pop = data.groupby(item_key).size() # counts popularity of item by simple counting how many interactions it has
@@ -544,32 +542,7 @@ class GRU4Rec:
         opt = IndexedAdagradM(self.model.parameters(), self.learning_rate, self.momentum) # init optimizer
 
         if combination != None:
-            # load ex2vec model
-            ex2vec_best_param_str = gru4rec_utils.convert_to_param_str('/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI/optim/best_params_ex2vec.json') # fetch current best ex2vec params
-
-            ex2vec_config = OrderedDict([x.split('=') for x in ex2vec_best_param_str.split(',') if "=" in x])
-
-            config = config = {
-                "alias": 'ex2vec_baseline_finaltrain_DEL',
-                "num_epoch": int(ex2vec_config['num_epoch']),
-                "batch_size": int(ex2vec_config['batch_size']),
-                "optimizer": 'adam',
-                "lr": float(ex2vec_config['learning_rate']),
-                "rmsprop_alpha": float(ex2vec_config['rmsprop_alpha']),
-                "momentum": float(ex2vec_config['momentum']),
-                "n_users": 5, # change to 463 - check github
-                "n_items": 146, # change to 879
-                "latent_dim": 64,
-                "num_negative": 0,
-                "l2_regularization": float(ex2vec_config['l2_regularization']),
-                "use_cuda": True,
-                "device_id": 0,
-                "pretrain": True,
-                "pretrain_dir": ex2vec_path,
-                "model_dir": "/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI/models/{}_Epoch{}_f1{:.4f}.pt",
-                "chckpt_dir":"/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI/chckpts/{}_Epoch{}_f1{:.4f}.pt",
-            }
-            ex2vec = Ex2VecEngine(config)
+            # put ex2vec into eval mode
             ex2vec.model.eval()
 
             # get copy of global rel ints
@@ -646,6 +619,12 @@ class GRU4Rec:
 
             print('Epoch{} --> loss: {:.6f} \t({:.2f}s) \t[{:.2f} mb/s | {:.0f} e/s]'.format(epoch+1, avgc, dt, len(c)/dt, np.sum(cc)/dt))
 
+            # save checkpoint every second epoch
+            if epoch % 2 == 0:
+                if save_path:
+                    chckpt_path = save_path.format(epoch, avgc)
+                    self.savemodel(path=chckpt_path)
+
     def _adjust_hidden(self, n_valid, finished_mask, valid_mask, H):
         if (self.n_sample == 0) and (n_valid < 2):
             return True
@@ -670,27 +649,28 @@ class GRU4Rec:
             if hasattr(self.data_iterator, 'sample_cache'):
                 self.data_iterator.sample_cache.device = device
         pass
-    def savemodel(self, path, param_str: str, metric_str: str):
+    def savemodel(self, path, param_str = None, metric_str = None, log_path = None, is_checkpoint=True):
         torch.save(self, path)
 
-        model_name = os.path.basename(path).split('.')[0] # split out model name without .pt ending
+        if is_checkpoint == False:
+            model_name = os.path.basename(path).split('.')[0] # split out model name without .pt ending
 
-        new_row = {
-            'model_name': [model_name],
-            'item_embds': [''],
-            'params': [param_str],
-            'results': [metric_str]
-        }
+            new_row = {
+                'model_name': [model_name],
+                'item_embds': [''],
+                'params': [param_str],
+                'results': [metric_str]
+            }
 
-        new_row_df = pd.DataFrame(new_row)
-        log_path = '/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI/results/best_models.csv'
-          
-        if os.path.exists(log_path): # append contents without header
-            new_row_df.to_csv(log_path, mode='a', header=False, index=False)
-        else: # create header and then append contents
-            new_row_df.to_csv(log_path, mode='w', header=True, index=False)
+            new_row_df = pd.DataFrame(new_row)        
+            if os.path.exists(log_path): # append contents without header
+                new_row_df.to_csv(log_path, mode='a', header=False, index=False)
+            else: # create header and then append contents
+                new_row_df.to_csv(log_path, mode='w', header=True, index=False)
 
-        print('Final model saved.')
+            print(f'Final model saved to {path}')
+        else:
+            print(f'Checkpoint saved to {path}')
     @classmethod
     def loadmodel(cls, path, device='cuda:0'):
         gru = torch.load(path, map_location=device)

@@ -1,6 +1,6 @@
 {"name":"loss", "dtype":"categorical", "values":["bpr-max", "cross-entropy"]}
 {"name":"constrained_embedding", "dtype":"categorical", "values":[false, true]}
-{"name":"embedding", "dtype":"categorical", "values":[0, 64, 128]}
+{"name":"embedding", "dtype":"categorical", "values":[0, 64]}
 {"name":"elu_param", "dtype":"categorical", "values":[0.5, 1, 0]}
 {"name":"layers", "dtype":"int", "values":[64, 64]}
 {"name":"n_epochs", "dtype":"categorical", "values":[7, 10]}

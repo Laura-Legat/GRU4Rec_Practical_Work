@@ -1,13 +1,21 @@
 import json
 import torch
+
 def convert_to_param_str(best_param_path):
+  """
+  Helper function that converts parameters from a JSON file into a string used for training models.
+
+  Args:
+    best_param_path: The path of the JSON file containing parameters for model training.
+
+  Returns:
+    String of parameters of the form "param1=value1,param2=value2,..."
+  """
   with open(best_param_path, 'r') as f:
     data = json.load(f)
 
-  params = data['best_params'] # extract only the parameter part
-  param_str = ','.join([f'{key}={value}' for key,value in params.items()])
-
-  return param_str
+  params = data['best_params'] # extract only the parameter part, not the optuna n_trials
+  return ','.join([f'{key}={value}' for key,value in params.items()])
 
 def get_itemId(gru, idx_list):
     """
