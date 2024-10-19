@@ -190,8 +190,7 @@ if args.test is not None:
         t0 = time.time() # start time for eval
         # evaluate model on test data with specified batch size
         print("Eval batch size: ", gru4rec_params.get('batch_size'))
-        res = evaluation.batch_eval(gru=gru, test_data=test_data, cutoff=args.measure, batch_size=50, mode=args.eval_type)
-        # batch size = int(gru4rec_params.get('batch_size'))
+        res = evaluation.batch_eval(gru=gru, test_data=test_data, cutoff=args.measure, batch_size=int(gru4rec_params.get('batch_size')), mode=args.eval_type)
         t1 = time.time() # end time for eval
         print('Evaluation took {:.2f}s'.format(t1 - t0))
 
