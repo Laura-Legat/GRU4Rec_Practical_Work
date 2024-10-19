@@ -207,6 +207,4 @@ if args.test is not None:
 
     # save trained model
     if args.save_model is not None:
-        save_model_path = args.save_model.format([x for x in res[pm_index].values()][0])
-        print('Saving final trained model to: {}'.format(save_model_path))
-        gru.savemodel(path=save_model_path, param_str=args.parameter_string, metric_str=metric_str, log_path = args.base_path + 'results/best_models.csv', is_checkpoint=False)
+        gru.savemodel(path=args.save_model, param_str=args.parameter_string, metric_str=metric_str, log_path = args.base_path + 'results/best_models.csv', is_checkpoint=False)
