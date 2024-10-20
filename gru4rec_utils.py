@@ -28,6 +28,21 @@ def get_itemId(gru, idx_list):
     """
     return [gru.data_iterator.itemidmap.index[gru.data_iterator.itemidmap.iloc[idx]] for idx in idx_list]
 
+def normalize_scores(original_scores):
+    """
+    Applies min-max normalization to a score tensor.
+
+    Args:
+        original_scores: The tensor of scores to noralize
+
+    Returns:
+        Normalized scores as tensor
+    """
+    # min-max normalization formula: score - min(score) / max(score) - min(score)
+    score_min = original_scores.min(dim=1, keepdim=True)[0]
+    score_max = original_scores.max(dim=1, keepdim=True)[0]
+    return (original_scores - score_min) / (score_max - score_min + 1e-8) # add small eps to avoid division by 0
+
 def combine_scores(gru4rec_scores, ex2vec_scores, alpha_list, mode = 'direct'):
     """
     Combines GRU4Rec and Ex2vec scores depending on the combination mode given.
@@ -83,6 +98,10 @@ def rerank(gru4rec_items, gru4rec_scores, ex2vec_scores, alpha_list, mode = 'dir
     Returns:
         reranked_items: List of items in re-ranked order, based on their ex2vec score -> List
     """
+    # min-max normalization of scores
+    gru4rec_scores = normalize_scores(gru4rec_scores)
+    ex2vec_scores = normalize_scores(ex2vec_scores)
+    
     # get the new, combined scores for each alpha
     combined_scores= combine_scores(gru4rec_scores, ex2vec_scores, alpha_list, mode)
 
