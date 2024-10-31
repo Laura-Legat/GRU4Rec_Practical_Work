@@ -1,22 +1,34 @@
 import torch
-import sys
+from tqdm import tqdm
 import numpy as np
-import importlib
 from gru4rec_pytorch import SessionDataIterator
 #sys.path.append('/content/drive/MyDrive/JKU/practical_work/Practical-Work-AI')
 from data_sampler import get_rel_int_dict, get_userId_from_mapping, get_itemId_from_mapping
 import gru4rec_utils
 
 @torch.no_grad()
-def store_only(gru, test_data, batch_size=50, item_key='itemId', user_key='userId', rel_int_key='relational_interval', session_key='SessionId', time_key='timestamp', k=879, ex2vec=None, score_store_pth='./'):
+def store_only(gru, test_data, batch_size=50, item_key='itemId', user_key='userId', rel_int_key='relational_interval', session_key='SessionId', time_key='timestamp', k=200, ex2vec=None, score_store_pth='./'):
     """
     Gets the scores of both GRU4Rec and Ex2Vec and stores them in a file for further analysis
     """
+            # how many batches
+            # save dict at the end
+            # tables new
+
+            
     # get modifiable copy of rel_int_dict
     rel_int_dict = get_rel_int_dict().copy()
     # update rel int dict once for all inetractions in test data
     for item, user, rel_int in zip(test_data['itemId'], test_data['userId'], test_data['relational_interval']):
         rel_int_dict[(user, item)] = rel_int 
+
+    total_batches = len(test_data) // batch_size
+    if len(test_data) % batch_size != 0:
+        total_batches += 1
+
+    # dictionaries to store scores
+    gru4rec_scores_dict = {}
+    ex2vec_scores_dict = {}
 
     # structure for storing the hidden states
     H = []
@@ -27,22 +39,15 @@ def store_only(gru, test_data, batch_size=50, item_key='itemId', user_key='userI
     # prepare dataloader
     data_iterator = SessionDataIterator(test_data, batch_size, 0, 0, 0, item_key=item_key, user_key=user_key, session_key=session_key, rel_int_key = rel_int_key, time_key=time_key, device=gru.device, itemidmap=gru.data_iterator.itemidmap) 
 
-    # specify files to save the scores to
-    gru4rec_scores_file = f'{score_store_pth}/gru4rec_scores.pt'
-    ex2vec_scores_file = f'{score_store_pth}/ex2vec_scores.pt'
-
-    with open(gru4rec_scores_file, 'wb') as gru_f, open(ex2vec_scores_file, 'wb') as ex2vec_f:
-        for in_idxs, _, userids, _, rel_ints, _ in data_iterator(enable_neg_samples=False, reset_hook=reset_hook):
+    with tqdm(total=total_batches, desc=f'Processing batch', unit='batch', ncols=100) as pbar:
+        for batch_idx, (in_idxs, _, userids, _, rel_ints, _) in enumerate(data_iterator(enable_neg_samples=False, reset_hook=reset_hook)):
             for h in H: h.detach_()
 
-            O = gru.model.forward(in_idxs, H, None, training=False) # for each item in in_idxs, calcuate a next-item probability for all items in the whole dataset (batch_size, n_all_items), e.g. (50, 879) or (10,879)
-            top_k_scores, top_indices = torch.topk(O, k, dim=1) # extract top k predicted next items, (batch_size, k)
-            
+            O = gru.model.forward(in_idxs, H, None, training=False) # for each item in in_idxs (batch_size,), calcuate a next-item probability for all items in the whole dataset (batch_size, n_all_items), e.g. (50, 879)
+            top_k_scores, top_indices = torch.topk(O, k, dim=1) # extract top k (=200) predicted next items, (batch_size, k)
+                    
             # incrementally save gru4rec scores
-            top_k_scores_cpu = top_k_scores.cpu()
-            torch.save(top_k_scores_cpu, gru_f)
-            del top_k_scores, top_k_scores_cpu
-            torch.cuda.empty_cache()
+            gru4rec_scores_dict[batch_idx] = top_k_scores.cpu().numpy()
 
             # flatten recommended items to 1d array
             flattened_top_k_items = top_indices.view(-1).cpu().numpy() #batch_size * k
@@ -55,15 +60,19 @@ def store_only(gru, test_data, batch_size=50, item_key='itemId', user_key='userI
 
             # scoring top-k next-item predictions with ex2vec
             ex2vec_scores, _ = ex2vec(torch.tensor(expanded_userids).cuda(), torch.tensor(flattened_top_k_items).cuda(), torch.tensor(np.array([np.pad(rel_int, (0, 50-len(rel_int)), constant_values=-1) for rel_int in rel_ints])).cuda())
-    
+            
             # split up flattened scores into list of lists again
             ex2vec_scores = [ex2vec_scores[i:i+k] for i in range(0,len(ex2vec_scores),k)]
-            ex2vec_scores = torch.stack(ex2vec_scores, dim=0) # reorder to tensor
+            ex2vec_scores_dict[batch_idx] = torch.stack(ex2vec_scores, dim=0).cpu().numpy() # reorder to tensor and store
 
-            ex2vec_scores_cpu = ex2vec_scores.cpu()
-            torch.save(ex2vec_scores_cpu, ex2vec_f)
-            del ex2vec_scores, ex2vec_scores_cpu, flattened_top_k_items, expanded_userids
-            torch.cuda.empty_cache()
+            # Clean up memory
+            del top_k_scores, top_indices, flattened_top_k_items, expanded_userids, ex2vec_scores
+            
+            pbar.update(1) # update progress bar
+
+    torch.save(gru4rec_scores_dict, f'{score_store_pth}/gru4rec_scores.pt')
+    torch.save(ex2vec_scores_dict, f'{score_store_pth}/ex2vec_scores.pt')
+
 
 @torch.no_grad() # disable grad computation for this function
 def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', item_key='itemId', user_key='userId', rel_int_key='relational_interval', session_key='SessionId', time_key='timestamp', combination=None, k=10, ex2vec=None, alpha_list=[0.5]):
