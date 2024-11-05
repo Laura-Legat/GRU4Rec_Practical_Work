@@ -7,7 +7,7 @@ from data_sampler import get_rel_int_dict, get_userId_from_mapping, get_itemId_f
 import gru4rec_utils
 
 @torch.no_grad()
-def store_only(gru, test_data, batch_size=50, item_key='itemId', user_key='userId', rel_int_key='relational_interval', session_key='SessionId', time_key='timestamp', k=200, ex2vec=None, score_store_pth='./'):
+def store_only(gru, test_data, batch_size=50, item_key='itemId', user_key='userId', rel_int_key='relational_interval', session_key='SessionId', time_key='timestamp', k=200, ex2vec=None, score_store_pth='.'):
     """
     Gets the scores of both GRU4Rec and Ex2Vec and stores them in a file for further analysis
     """
@@ -50,7 +50,7 @@ def store_only(gru, test_data, batch_size=50, item_key='itemId', user_key='userI
             gru4rec_scores_dict[batch_idx] = top_k_scores.cpu().numpy()
 
             # flatten recommended items to 1d array
-            flattened_top_k_items = top_indices.view(-1).cpu().numpy() #batch_size * k
+            flattened_top_k_items = top_indices.view(-1) #batch_size * k
 
             # expand usersids along recommended item lists, and flatten them using sum()
             expanded_userids = np.repeat(userids, k)
