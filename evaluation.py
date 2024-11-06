@@ -37,44 +37,43 @@ def store_only(gru, test_data, batch_size=4096, item_key='itemId', user_key='use
     data_iterator = SessionDataIterator(test_data, batch_size, 0, 0, 0, item_key=item_key, user_key=user_key, session_key=session_key, rel_int_key = rel_int_key, time_key=time_key, device=gru.device, itemidmap=gru.data_iterator.itemidmap) 
 
     with h5py.File(score_store_pth, 'a') as h5_f:
-	gru4rec_scores = h5_f.create_dataset('gru4rec_scores', shape=(0, batch_size, k), chunks=True, compression='gzip')
-    	ex2vec_scores = h5_f.create_dataset('ex2vec_scores', shape=(0, batch_size, k), chunks=True, compression='gzip')
-	with tqdm(total=total_batches, desc=f'Processing batch', unit='batch', ncols=100) as pbar:
-        	for batch_idx, (in_idxs, _, userids, _, rel_ints, _) in enumerate(data_iterator(enable_neg_samples=False, reset_hook=reset_hook)):
-            		for h in H: h.detach_()
+        gru4rec_scores = h5_f.create_dataset('gru4rec_scores', shape=(0, batch_size, k), chunks=True, compression='gzip')
+        ex2vec_scores = h5_f.create_dataset('ex2vec_scores', shape=(0, batch_size, k), chunks=True, compression='gzip')
+        with tqdm(total=total_batches, desc=f'Processing batch', unit='batch', ncols=100) as pbar:
+            for batch_idx, (in_idxs, _, userids, _, rel_ints, _) in enumerate(data_iterator(enable_neg_samples=False, reset_hook=reset_hook)):
+                for h in H: h.detach_()
+                
+                O = gru.model.forward(in_idxs, H, None, training=False) # for each item in in_idxs (batch_size,), calcuate a next-item probability for all items in the whole dataset (batch_size, n_all_items), e.g. (50, 879)
+                
+                top_k_scores, top_indices = torch.topk(O, k, dim=1) # extract top k (=200) predicted next items, (batch_size, k)
+                
+                # flatten recommended items to 1d array
+                flattened_top_k_items = top_indices.view(-1) #batch_size * k
+                
+                # expand usersids along recommended item lists, and flatten them using sum()
+                expanded_userids = np.repeat(userids, k)
+                
+                # for current user ids and recommended items, extract relational interval from rel_int dict
+                rel_ints = [rel_int_dict.get((user, item), []) for user, item in zip(expanded_userids, flattened_top_k_items)]
+                
+                # scoring top-k next-item predictions with ex2vec
+                ex2vec_scores, _ = ex2vec(torch.tensor(expanded_userids).cuda(), torch.tensor(flattened_top_k_items).cuda(), torch.tensor(np.array([np.pad(rel_int, (0, 50-len(rel_int)), constant_values=-1) for rel_int in rel_ints])).cuda())
+                
+                # split up flattened scores into list of lists again
+                ex2vec_scores = [ex2vec_scores[i:i+k] for i in range(0,len(ex2vec_scores),k)]
+                ex2vec_scores = torch.stack(ex2vec_scores, dim=0) # reorder to tensor and store
+                
+                # resize hdf5 file accordingly and store batch
+                gru4rec_scores.resize((batch_idx + 1, batch_size, k))
+                gru4rec_scores[batch_idx, :, :] = top_k_scores.cpu().numpy()
 
-            		O = gru.model.forward(in_idxs, H, None, training=False) # for each item in in_idxs (batch_size,), calcuate a next-item probability for all items in the whole dataset (batch_size, n_all_items), e.g. (50, 879)
-            		top_k_scores, top_indices = torch.topk(O, k, dim=1) # extract top k (=200) predicted next items, (batch_size, k)
-                    
-            		# incrementally save gru4rec scores
-            		gru4rec_scores_dict[batch_idx] = top_k_scores.cpu().numpy()
-
-            		# flatten recommended items to 1d array
-            		flattened_top_k_items = top_indices.view(-1) #batch_size * k
-
-            		# expand usersids along recommended item lists, and flatten them using sum()
-            		expanded_userids = np.repeat(userids, k)
-
-            		# for current user ids and recommended items, extract relational interval from rel_int dict
-            		rel_ints = [rel_int_dict.get((user, item), []) for user, item in zip(expanded_userids, flattened_top_k_items)]
-
-            		# scoring top-k next-item predictions with ex2vec
-            		ex2vec_scores, _ = ex2vec(torch.tensor(expanded_userids).cuda(), torch.tensor(flattened_top_k_items).cuda(), torch.tensor(np.array([np.pad(rel_int, (0, 50-len(rel_int)), constant_values=-1) for rel_int in rel_ints])).cuda())
-            
-            		# split up flattened scores into list of lists again
-            		ex2vec_scores = [ex2vec_scores[i:i+k] for i in range(0,len(ex2vec_scores),k)]
-            		ex2vec_scores = torch.stack(ex2vec_scores, dim=0) # reorder to tensor and store
-
-			gru4rec_scores.resize((batch_idx + 1, batch_size, k))
-			gru4rec_scores[batch_idx, :, :] = top_k_scores.cpu().numpy()
-
-			ex2vec_scores.resize((batch_idx+1, batch_size, k))
-			ex2vec_scores[batch_idx, :, :] = ex2vec_scores.cpu().numpy()
-
-            		# Clean up memory
-            		del top_k_scores, top_indices, flattened_top_k_items, expanded_userids, ex2vec_scores
-            
-            		pbar.update(1) # update progress bar
+                ex2vec_scores.resize((batch_idx+1, batch_size, k))
+                ex2vec_scores[batch_idx, :, :] = ex2vec_scores.cpu().numpy()
+                
+                # Clean up memory
+                del top_k_scores, top_indices, flattened_top_k_items, expanded_userids, ex2vec_scores
+                
+                pbar.update(1) # update progress bar
 
 @torch.no_grad() # disable grad computation for this function
 def batch_eval(gru, test_data, cutoff=[20], batch_size=50, mode='conservative', item_key='itemId', user_key='userId', rel_int_key='relational_interval', session_key='SessionId', time_key='timestamp', combination=None, k=10, ex2vec=None, alpha_list=[0.5]):
