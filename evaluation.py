@@ -38,7 +38,7 @@ def store_only(gru, test_data, batch_size=4096, item_key='itemId', user_key='use
 
     with h5py.File(score_store_pth + '/model_scores.h5', 'a') as h5_f:
         gru4rec_ds = h5_f.create_dataset('gru4rec_scores', shape=(0, batch_size, k), maxshape=(total_batches, batch_size, k), chunks=True, compression='gzip')
-        ex2vec_sa = h5_f.create_dataset('ex2vec_scores', shape=(0, batch_size, k), maxshape=(total_batches, batch_size, k), chunks=True, compression='gzip')
+        ex2vec_ds = h5_f.create_dataset('ex2vec_scores', shape=(0, batch_size, k), maxshape=(total_batches, batch_size, k), chunks=True, compression='gzip')
         with tqdm(total=total_batches, desc=f'Processing batch', unit='batch', ncols=100) as pbar:
             for batch_idx, (in_idxs, _, userids, _, rel_ints, _) in enumerate(data_iterator(enable_neg_samples=False, reset_hook=reset_hook)):
                 for h in H: h.detach_()
@@ -64,13 +64,13 @@ def store_only(gru, test_data, batch_size=4096, item_key='itemId', user_key='use
                 ex2vec_scores = torch.stack(ex2vec_scores, dim=0) # reorder to tensor and store
                 
                 # resize hdf5 file accordingly and store batch
-		top_k_scores = np.expand_dims(top_k_scores.cpu().numpy(), axis=0)
+                top_k_scores = np.expand_dims(top_k_scores.cpu().numpy(), axis=0)
                 gru4rec_ds.resize((batch_idx + 1, batch_size, k))
-                gru4rec_scores[batch_idx, :, :] = top_k_scores
-
-		ex2vec_scores = np.expand_dims(ex2vec_scores.cpu().numpy(), axis=0)
+                gru4rec_ds[batch_idx, :, :] = top_k_scores
+                
+                ex2vec_scores = np.expand_dims(ex2vec_scores.cpu().numpy(), axis=0)
                 ex2vec_ds.resize((batch_idx+1, batch_size, k))
-                ex2vec_scores[batch_idx, :, :] = ex2vec_scores
+                ex2vec_ds[batch_idx, :, :] = ex2vec_scores
                 
                 # Clean up memory
                 del top_k_scores, top_indices, flattened_top_k_items, expanded_userids, ex2vec_scores
