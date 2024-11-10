@@ -37,8 +37,8 @@ def store_only(gru, test_data, batch_size=4096, item_key='itemId', user_key='use
     data_iterator = SessionDataIterator(test_data, batch_size, 0, 0, 0, item_key=item_key, user_key=user_key, session_key=session_key, rel_int_key = rel_int_key, time_key=time_key, device=gru.device, itemidmap=gru.data_iterator.itemidmap) 
 
     with h5py.File(score_store_pth + '/model_scores.h5', 'a') as h5_f:
-        gru4rec_ds = h5_f.create_dataset('gru4rec_scores', shape=(0, batch_size, k), maxshape=(total_batches, batch_size, k), chunks=True, compression='gzip')
-        ex2vec_ds = h5_f.create_dataset('ex2vec_scores', shape=(0, batch_size, k), maxshape=(total_batches, batch_size, k), chunks=True, compression='gzip')
+        gru4rec_ds = h5_f.create_dataset('gru4rec_scores', shape=(0, batch_size, k), maxshape=(total_batches, batch_size, k), chunks=True, fillvalue=-7, compression='gzip', compression_opts=6)
+        ex2vec_ds = h5_f.create_dataset('ex2vec_scores', shape=(0, batch_size, k), maxshape=(total_batches, batch_size, k), chunks=True, fillvalue=-7, compression='gzip', compression_opts=6)
         with tqdm(total=total_batches, desc=f'Processing batch', unit='batch', ncols=100) as pbar:
             for batch_idx, (in_idxs, _, userids, _, rel_ints, _) in enumerate(data_iterator(enable_neg_samples=False, reset_hook=reset_hook)):
                 for h in H: h.detach_()
@@ -66,11 +66,11 @@ def store_only(gru, test_data, batch_size=4096, item_key='itemId', user_key='use
                 # resize hdf5 file accordingly and store batch
                 top_k_scores = np.expand_dims(top_k_scores.cpu().numpy(), axis=0)
                 gru4rec_ds.resize((batch_idx + 1, batch_size, k))
-                gru4rec_ds[batch_idx, :, :] = top_k_scores
+                gru4rec_ds[batch_idx, :top_k_scores.shape[1], :] = top_k_scores
                 
                 ex2vec_scores = np.expand_dims(ex2vec_scores.cpu().numpy(), axis=0)
                 ex2vec_ds.resize((batch_idx+1, batch_size, k))
-                ex2vec_ds[batch_idx, :, :] = ex2vec_scores
+                ex2vec_ds[batch_idx, :ex2vec_scores.shape[1], :] = ex2vec_scores
                 
                 # Clean up memory
                 del top_k_scores, top_indices, flattened_top_k_items, expanded_userids, ex2vec_scores
