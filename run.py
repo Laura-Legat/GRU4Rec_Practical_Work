@@ -51,6 +51,8 @@ parser.add_argument('--optim', action='store_true', help='Sets the flag that thi
 # parameters for setting up ex2vec in case of combination
 parser.add_argument('-pth', '--base_path', type=str, default='./', help='Base path for Ex2Vec setup (default: ./)')
 parser.add_argument('-ex', '--ex2vec_path', type=str, default=None, help='Path to a pre-trained ex2vec model, used as regularization during training (default: None).')
+parser.add_argument('-tan', '--use_tanh', action='store_true', help='If provided, Ex2Vec will use tanh activation function.')
+
 args = parser.parse_args() # parse user-set args and store them in args variable
 
 orig_cwd = os.getcwd()
@@ -142,7 +144,7 @@ if args.combination:
         "chckpt_dir": args.base_path + "chckpts/{}_Epoch{}_f1{:.4f}.pt",
     }
 
-    ex2vec = Ex2VecEngine(config)
+    ex2vec = Ex2VecEngine(config, args.ex2vec_path)
 else:
     ex2vec = None
 
@@ -171,7 +173,7 @@ else: # new model will be created and trained
     print('Loading training data...')
     print('Started training')
     t0 = time.time() # record current start time
-    gru.fit(data, sample_cache_max_size=args.sample_store_size, item_key=args.item_key, session_key=args.session_key, time_key=args.time_key, combination=args.combination, ex2vec=ex2vec, alpha=args.alpha, save_path=args.base_path+'GRU4Rec_Fork/chckpts/GRU4Rec_chckpts_Epoch_{}_loss{:.6f}.pt' if not args.optim else None) # do not store checkpoints during hyperparameter tuning
+    gru.fit(data, sample_cache_max_size=args.sample_store_size, item_key=args.item_key, session_key=args.session_key, time_key=args.time_key, combination=args.combination, ex2vec=ex2vec, alpha=args.alpha, save_path=args.base_path+'GRU4Rec_Fork/chckpts/GRU4Rec_chckpts_Epoch_{}_loss{:.6f}.pt' if not args.optim else None, use_tanh=args.use_tanh) # do not store checkpoints during hyperparameter tuning
     t1 = time.time() # record current end time
     print('Total training time: {:.2f}s'.format(t1 - t0))
     
