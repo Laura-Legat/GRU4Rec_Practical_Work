@@ -10,13 +10,22 @@ import gru4rec_utils
 @torch.no_grad()
 def store_only(gru, test_data, batch_size=4096, item_key='itemId', user_key='userId', rel_int_key='relational_interval', session_key='SessionId', time_key='timestamp', k=100, ex2vec=None, score_store_pth='.'):
     """
-    Gets the scores of both GRU4Rec and Ex2Vec and stores them in a file for further analysis
-    """
-            # how many batches
-            # save dict at the end
-            # tables new
+    Gets the scores of both GRU4Rec and Ex2Vec and stores them in a file along with the corresponding items and out_idx for further analysis and metric calculation.
 
-            
+    Args:
+        gru: The GRU4Rec model being evaluated
+        test_data: Dataset to evaluate the GRU4Rec model on
+        batch_size: The batch size for processing the test dataset
+        item_key: Column name of item ID column in the dataset
+        user_key: Column name of the user ID column in the dataset
+        rel_int_key: Column name of the relational interval column in the dataset
+        session_key: Column name of session ID column in the dataset
+        time_key: Column name of timestamp column in the dataset
+        k: Top-k scores to choose from list of all gru4rec scores. Set k=[879] for re-ranking all items via ex2vec. k decides "re-rank all + cut" or "cut first + re-rank filtered items"
+        ex2vec: Trained Ex2Vec model for scoring gru4rec's top-k items
+        score_store_pth: The folder where to store the .h5 file containing the scores
+    """        
+
     # get modifiable copy of rel_int_dict
     rel_int_dict = get_rel_int_dict().copy()
     # update rel int dict once for all inetractions in test data
@@ -36,16 +45,22 @@ def store_only(gru, test_data, batch_size=4096, item_key='itemId', user_key='use
     # prepare dataloader
     data_iterator = SessionDataIterator(test_data, batch_size, 0, 0, 0, item_key=item_key, user_key=user_key, session_key=session_key, rel_int_key = rel_int_key, time_key=time_key, device=gru.device, itemidmap=gru.data_iterator.itemidmap) 
 
-    with h5py.File(score_store_pth + '/model_scores.h5', 'a') as h5_f:
+    with h5py.File(score_store_pth + '/model_scores.h5', 'a') as h5_f: # iteratively write to h5 file for speed-improvement
+
+        # generate separate datasets to store the top-k gru4rec scores, the corresponding top-k next-item predicted items, the ex2vec scores and the targets
         gru4rec_ds = h5_f.create_dataset('gru4rec_scores', shape=(0, batch_size, k), maxshape=(total_batches, batch_size, k), chunks=True, fillvalue=-7, compression='gzip', compression_opts=6)
+        gru4rec_items_ds = h5_f.create_dataset('gru4rec_items', shape=(0, batch_size, k), maxshape=(total_batches, batch_size, k), chunks=True, fillvalue=-7, compression='gzip', compression_opts=6)
         ex2vec_ds = h5_f.create_dataset('ex2vec_scores', shape=(0, batch_size, k), maxshape=(total_batches, batch_size, k), chunks=True, fillvalue=-7, compression='gzip', compression_opts=6)
+        targets_ds = h5_f.create_dataset('targets', shape=(0, batch_size), maxshape=(total_batches, batch_size), chunks=True, fillvalue=-7, compression='gzip', compression_opts=6)
+        
+
         with tqdm(total=total_batches, desc=f'Processing batch', unit='batch', ncols=100) as pbar:
-            for batch_idx, (in_idxs, _, userids, _, rel_ints, _) in enumerate(data_iterator(enable_neg_samples=False, reset_hook=reset_hook)):
+            for batch_idx, (in_idxs, out_idxs, userids, _, rel_ints, _) in enumerate(data_iterator(enable_neg_samples=False, reset_hook=reset_hook)):
                 for h in H: h.detach_()
                 
                 O = gru.model.forward(in_idxs, H, None, training=False) # for each item in in_idxs (batch_size,), calcuate a next-item probability for all items in the whole dataset (batch_size, n_all_items), e.g. (50, 879)
                 
-                top_k_scores, top_indices = torch.topk(O, k, dim=1) # extract top k (=200) predicted next items, (batch_size, k)
+                top_k_scores, top_indices = torch.topk(O, k, dim=1) # extract top k (=100) predicted next items, (batch_size, k)
                 
                 # flatten recommended items to 1d array
                 flattened_top_k_items = top_indices.view(-1) #batch_size * k
@@ -62,18 +77,30 @@ def store_only(gru, test_data, batch_size=4096, item_key='itemId', user_key='use
                 # split up flattened scores into list of lists again
                 ex2vec_scores = [ex2vec_scores[i:i+k] for i in range(0,len(ex2vec_scores),k)]
                 ex2vec_scores = torch.stack(ex2vec_scores, dim=0) # reorder to tensor and store
-                
+
+               
                 # resize hdf5 file accordingly and store batch
                 top_k_scores = np.expand_dims(top_k_scores.cpu().numpy(), axis=0)
                 gru4rec_ds.resize((batch_idx + 1, batch_size, k))
                 gru4rec_ds[batch_idx, :top_k_scores.shape[1], :] = top_k_scores
+
+                # resize and fill gru4rec item dataset
+                top_indices = np.expand_dims(top_indices.cpu().numpy(), axis=0)
+                gru4rec_items_ds.resize((batch_idx+1, batch_size, k))
+                gru4rec_items_ds[batch_idx, :top_indices.shape[1], :] = top_indices
                 
+                # resize and fill ex2vec ds
                 ex2vec_scores = np.expand_dims(ex2vec_scores.cpu().numpy(), axis=0)
                 ex2vec_ds.resize((batch_idx+1, batch_size, k))
                 ex2vec_ds[batch_idx, :ex2vec_scores.shape[1], :] = ex2vec_scores
+
+                # resize and fill targets
+                target_idxs = out_idxs.cpu().numpy()
+                targets_ds.resize((batch_idx+1, batch_size))
+                targets_ds[batch_idx, :target_idxs.shape[0]] = target_idxs
                 
                 # Clean up memory
-                del top_k_scores, top_indices, flattened_top_k_items, expanded_userids, ex2vec_scores
+                del top_k_scores, top_indices, flattened_top_k_items, expanded_userids, ex2vec_scores, target_idxs
                 
                 pbar.update(1) # update progress bar
 
