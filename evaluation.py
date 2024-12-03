@@ -143,22 +143,12 @@ def calc_metrics_from_scores(eval_ds_path, alpha, combination_mode, eval_mode='s
                 ex2vec_scores = ex2vec_scores_ds[ex2vec_scores_chunk] # (batch_idx, batch_size, k)
                 out_idxs = out_idxs_ds[out_idx_chunks] # (batch_idx, batch_size,)
 
-                #print("Orig GRU4Rec Scores: ", gru4rec_scores[:,45:55, :5])
-                #print("Orig GRU4Rec Items: ", gru4rec_items[:,45:55, :5])
-                #print("Orig Ex2Vec Scores: ", ex2vec_scores[:,45:55, :5])
-                #print("Orig out_idxs: ", out_idxs[:,:5])
-
                 # reshape arrays to concat batch_idx and batch_size dims 
                 k = gru4rec_scores.shape[-1]
                 gru4rec_scores = gru4rec_scores.reshape(-1, k) # (batch_idx*batch_size, k)
                 gru4rec_items = gru4rec_items.reshape(-1, k) # (batch_idx*batch_size, k)
                 ex2vec_scores = ex2vec_scores.reshape(-1, k) # (batch_idx*batch_size, k)
                 out_idxs = out_idxs.reshape(-1) # (batch_idx*batch_size)
-
-                #print("Concat GRU4Rec Scores: ", gru4rec_scores[45:55, :5])
-                #print("Concat GRU4Rec Items: ", gru4rec_items[45:55, :5])
-                #print("Concat Ex2Vec Scores: ", ex2vec_scores[45:55, :5])
-                #print("Concat out_idxs: ", out_idxs[45:55])
 
                 # remove fillvalue -7 (appended to datasets from store_only function)
                 fillval_mask = torch.tensor((gru4rec_scores != -7)) # get all elements which are not a filler value
@@ -168,24 +158,12 @@ def calc_metrics_from_scores(eval_ds_path, alpha, combination_mode, eval_mode='s
                 ex2vec_scores = ex2vec_scores[torch.all(fillval_mask, dim=1)]
                 out_idxs = torch.tensor(out_idxs[out_idxs != -7], dtype=torch.int32)
 
-
-
-                #print("Cleaned GRU4Rec Scores: ", gru4rec_scores[45:55, :5])
-                #print("Cleaned GRU4Rec Items: ", gru4rec_items[45:55, :5])
-                #print("Cleaned Ex2Vec Scores: ", ex2vec_scores[45:55, :5])
-                #print("Cleaned out_idxs: ", out_idxs[0:55])
-
                 combined_scores = gru4rec_utils.combine_scores(torch.tensor(gru4rec_scores).cuda(), torch.tensor(ex2vec_scores).cuda(), alpha, combination_mode, 0.5)
                 combined_scores = combined_scores.squeeze(0) # remove alpha dimension as we do experiments with single element
-
-                #print("Combined scores: ", combined_scores[45:55,:5])
 
                 # adapted code from original GRU4Rec repo
                 oscores = torch.tensor(gru4rec_scores.T) # get original GRU4Rec scores
                 oscores_combined = torch.tensor(combined_scores.T.cpu()) # get original combined scores
-
-                #print("oscores: ", oscores[45:55,:5])
-                #print("oscores combined: ", oscores_combined[45:55,:5])
 
                 tscores = [] # store true non-comb scores
                 tscores_combined = [] # store true comb scores
@@ -216,17 +194,12 @@ def calc_metrics_from_scores(eval_ds_path, alpha, combination_mode, eval_mode='s
                     ranks_combined = (oscores_combined >= tscores_combined).sum(dim=0) + 0.5*((oscores_combined == tscores_combined).dim(axis=0) - 1) + 1
                 else: raise NotImplementedError
 
-                #print("ranks: ", ranks)
-                #print("ranks_combined: ", ranks_combined)
-
                 # calculate batch mrr and recall
                 for c in cutoffs:
                     recall[c] += (ranks <= c).sum().cpu().numpy() #e.g. if cutoff==5, then it counts how often the most relevant item is among the top 5  ranks
                     mrr[c] += ((ranks <= c) / ranks.float()).sum().cpu().numpy()
                     recall_combined[c] += (ranks_combined <= c).sum().cpu().numpy() #e.g. if cutoff==5, then it counts how often the most relevant item is among the top 5  ranks
                     mrr_combined[c] += ((ranks_combined <= c) / ranks.float()).sum().cpu().numpy()
-                #print("Recall: ", recall)
-                #print("Recall combined: ", recall_combined)
 
                 # keep track of batchsize for calculating metrics over all batches
                 n += gru4rec_scores.shape[0] # n += batch_size
