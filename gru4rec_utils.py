@@ -43,7 +43,7 @@ def normalize_scores(original_scores):
     score_max = original_scores.max(dim=1, keepdim=True)[0]
     return (original_scores - score_min) / (score_max - score_min + 1e-8) # add small eps to avoid division by 0
 
-def combine_scores(gru4rec_scores, ex2vec_scores, alpha_list, mode = 'direct'):
+def combine_scores(gru4rec_scores, ex2vec_scores, alpha_list, mode = 'direct', ex2vec_threshold=None):
     """
     Combines GRU4Rec and Ex2vec scores depending on the combination mode given.
 
@@ -52,6 +52,7 @@ def combine_scores(gru4rec_scores, ex2vec_scores, alpha_list, mode = 'direct'):
         ex2vec_scores: The corresponding scores for each itemin gru4rec_items -> Tensor (batch_size, n_items) -> tensor([[scores], [scores], [scores], ...])
         alpha_list: List of alphas to try. Alpha is a parameter set for weighted/boosted combination of scores, i.e. how much to take each models' predictions into account for the final score
         mode: The combination modality (str in [direct, weighted, boosted, mult])
+        ex2vec_threshold: Threshold of the scores to include in combination calculations
 
     Returns:
         List of lists of lists of combined score depending on combination mode and alpha -> [[[gruscores(0)&&ex2vecscores(0) for alpha(0)], [gruscores(0)&&ex2vecscores(0) for alpha(1)], ...],  [[gruscores(1)&&ex2vecscores(1) for alpha(0)], [gruscores(1)&&ex2vecscores(1) for alpha(1), ...], ...]
@@ -69,12 +70,20 @@ def combine_scores(gru4rec_scores, ex2vec_scores, alpha_list, mode = 'direct'):
     alphas_tensor = torch.tensor(alpha_list, device=gru4rec_scores.device).view(num_alphas, 1, 1)
 
     if mode == 'direct':
+        # zero out scores where ex2vec_scores <= 0.5
+        if ex2vec_threshold: ex2vec_scores = ex2vec_scores * (ex2vec_scores >= 0.5)
         combined_scores = ex2vec_scores.unsqueeze(0).repeat(num_alphas, 1, 1)
     elif mode == 'weighted':
+        # zero out scores where ex2vec_scores <= 0.5
+        if ex2vec_threshold: ex2vec_scores = ex2vec_scores * (ex2vec_scores >= 0.5)
         combined_scores = (alphas_tensor * gru4rec_scores) + ((1 - alphas_tensor) * ex2vec_scores)
     elif mode == 'boosted':
+        # zero out scores where ex2vec_scores <= 0.5
+        if ex2vec_threshold: ex2vec_scores = ex2vec_scores * (ex2vec_scores >= 0.5)
         combined_scores = gru4rec_scores + (alphas_tensor * ex2vec_scores)
     elif mode == 'mult':
+        # zero out scores where ex2vec_scores <= 0.5
+        if ex2vec_threshold: ex2vec_scores = ex2vec_scores * (ex2vec_scores >= 0.5)
         combined_scores = (gru4rec_scores * ex2vec_scores).repeat(num_alphas, 1, 1)
     else:
         raise NotImplementedError
