@@ -171,11 +171,11 @@ def calc_metrics_from_scores(eval_ds_path, alpha, combination_mode, eval_mode='s
 
 
                 #print("Cleaned GRU4Rec Scores: ", gru4rec_scores[45:55, :5])
-                print("Cleaned GRU4Rec Items: ", gru4rec_items[45:55, :5])
+                #print("Cleaned GRU4Rec Items: ", gru4rec_items[45:55, :5])
                 #print("Cleaned Ex2Vec Scores: ", ex2vec_scores[45:55, :5])
-                print("Cleaned out_idxs: ", out_idxs[45:55])
+                #print("Cleaned out_idxs: ", out_idxs[0:55])
 
-                combined_scores = gru4rec_utils.combine_scores(torch.tensor(gru4rec_scores).cuda(), torch.tensor(ex2vec_scores).cuda(), alpha, combination_mode)
+                combined_scores = gru4rec_utils.combine_scores(torch.tensor(gru4rec_scores).cuda(), torch.tensor(ex2vec_scores).cuda(), alpha, combination_mode, 0.5)
                 combined_scores = combined_scores.squeeze(0) # remove alpha dimension as we do experiments with single element
 
                 #print("Combined scores: ", combined_scores[45:55,:5])
@@ -190,8 +190,11 @@ def calc_metrics_from_scores(eval_ds_path, alpha, combination_mode, eval_mode='s
                 tscores = [] # store true non-comb scores
                 tscores_combined = [] # store true comb scores
                 for i, out_idx in enumerate(out_idxs): # loop through target items of each input item
-                    if out_idx in gru4rec_items[i]: # check if out_idx is in topk predicted out_idx
-                        out_idx_index = (gru4rec_items[i] == out_idx).nonzero()[0].item() # get index where out_idx is located in gru4rec_items
+                    out_idx_int = out_idx.item()
+                    #print("Curr outitem: ", out_idx)
+                    #print("Curr topk item row: ", gru4rec_items[i])
+                    if out_idx_int in gru4rec_items[i]: # check if out_idx is in topk predicted out_idx
+                        out_idx_index = (gru4rec_items[i] == out_idx_int).nonzero()[0].item() # get first index where out_idx is located in gru4rec_items
                         tscores.append(gru4rec_scores[i][out_idx_index]) # retrieve and append corresponding score of the out_idx item in gru4rec scores
                         tscores_combined.append(combined_scores[i][out_idx_index]) # retrieve same score in combined_scores
                     else:
@@ -201,9 +204,6 @@ def calc_metrics_from_scores(eval_ds_path, alpha, combination_mode, eval_mode='s
 
                 # convert lists to tensors
                 tscores, tscores_combined = torch.tensor(tscores), torch.tensor(tscores_combined)
-
-                print("tscores: ", tscores[45:55])
-                print("tscores combined: ", tscores_combined[45:55])
 
                 if eval_mode == 'standard':
                     ranks = (oscores > tscores).sum(dim=0) + 1 # calculates how many of the 879 item scores (for one particular in_idx) have scored higher than the corresponding true item (corresponding out_idx) + 1 for actual placement (1st place instead of 0th place)
@@ -216,8 +216,8 @@ def calc_metrics_from_scores(eval_ds_path, alpha, combination_mode, eval_mode='s
                     ranks_combined = (oscores_combined >= tscores_combined).sum(dim=0) + 0.5*((oscores_combined == tscores_combined).dim(axis=0) - 1) + 1
                 else: raise NotImplementedError
 
-                print("ranks: ", ranks)
-                print("ranks_combined: ", ranks_combined)
+                #print("ranks: ", ranks)
+                #print("ranks_combined: ", ranks_combined)
 
                 # calculate batch mrr and recall
                 for c in cutoffs:
@@ -225,8 +225,8 @@ def calc_metrics_from_scores(eval_ds_path, alpha, combination_mode, eval_mode='s
                     mrr[c] += ((ranks <= c) / ranks.float()).sum().cpu().numpy()
                     recall_combined[c] += (ranks_combined <= c).sum().cpu().numpy() #e.g. if cutoff==5, then it counts how often the most relevant item is among the top 5  ranks
                     mrr_combined[c] += ((ranks_combined <= c) / ranks.float()).sum().cpu().numpy()
-                print("Recall: ", recall)
-                print("Recall combined: ", recall_combined)
+                #print("Recall: ", recall)
+                #print("Recall combined: ", recall_combined)
 
                 # keep track of batchsize for calculating metrics over all batches
                 n += gru4rec_scores.shape[0] # n += batch_size
