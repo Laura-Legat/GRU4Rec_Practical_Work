@@ -158,7 +158,7 @@ def calc_metrics_from_scores(eval_ds_path, alpha, combination_mode, eval_mode='s
                 ex2vec_scores = ex2vec_scores[torch.all(fillval_mask, dim=1)]
                 out_idxs = torch.tensor(out_idxs[out_idxs != -7], dtype=torch.int32)
 
-                combined_scores = gru4rec_utils.combine_scores(torch.tensor(gru4rec_scores).cuda(), torch.tensor(ex2vec_scores).cuda(), alpha, combination_mode, 0.5)
+                combined_scores = gru4rec_utils.combine_scores(torch.tensor(gru4rec_scores).cuda(), torch.tensor(ex2vec_scores).cuda(), alpha, combination_mode, None)
                 combined_scores = combined_scores.squeeze(0) # remove alpha dimension as we do experiments with single element
 
                 # adapted code from original GRU4Rec repo

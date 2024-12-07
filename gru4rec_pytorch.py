@@ -9,7 +9,8 @@ import time
 import os
 import sys
 from tqdm import tqdm
-from GRU4Rec_Fork import gru4rec_utils
+#from GRU4Rec_Fork import gru4rec_utils
+import gru4rec_utils
 from data_sampler import get_rel_int_dict
 
 
@@ -523,7 +524,7 @@ class GRU4Rec:
         # BPR formula(?) pp. 5 in gru4rec paper + term for stabilization (1e-24) + regularization term +self.bpreg*torch.sum((O**2)*softmax_scores, dim=1)
         return torch.sum((-torch.log(torch.sum(torch.sigmoid(target_scores-O)*softmax_scores, dim=1)+1e-24)+self.bpreg*torch.sum((O**2)*softmax_scores, dim=1)))
     
-    def fit(self, data, sample_cache_max_size=10000000, compatibility_mode=True, item_key='ItemId', session_key='SessionId', time_key='Time', combination=None, ex2vec=None, alpha=[0.2], save_path=None): # Training loop of the model
+    def fit(self, data, sample_cache_max_size=10000000, compatibility_mode=True, item_key='ItemId', session_key='SessionId', time_key='Time', combination=None, ex2vec=None, alpha=[0.2], save_path=None, use_tanh=False): # Training loop of the model
         self.error_during_train = False # flag for tracking NaN losses during training
 
         self.data_iterator = SessionDataIterator(data, self.batch_size, n_sample=self.n_sample, sample_alpha=self.sample_alpha, sample_cache_max_size=sample_cache_max_size, item_key=item_key, session_key=session_key, time_key=time_key, session_order='sequential', device=self.device) # iterator to loop over sessionized data
@@ -580,7 +581,7 @@ class GRU4Rec:
                       rel_ints_next = [rel_int_dict.get((user, item), []) for user, item in zip(userids, next_positive.tolist())]
 
                       # scoring top-k next-item predictions with ex2vec
-                      ex2vec_scores, _ = ex2vec.model(torch.tensor(np.array(userids), device=self.device), next_positive.to(self.device), torch.tensor(np.array([np.pad(rel_int, (0, 50 - len(rel_int)), constant_values=-1) for rel_int in rel_ints_next]), device=self.device))
+                      ex2vec_scores, _ = ex2vec.model(torch.tensor(np.array(userids), device=self.device), next_positive.to(self.device), torch.tensor(np.array([np.pad(rel_int, (0, 50 - len(rel_int)), constant_values=-1) for rel_int in rel_ints_next]), device=self.device), use_tanh=use_tanh)
                       ex2vec_scores_aligned = ex2vec_scores.repeat(R.shape[0], 1)
 
                       # calculate new next-item scores depending on combination with ex2vec
@@ -619,8 +620,8 @@ class GRU4Rec:
 
             print('Epoch{} --> loss: {:.6f} \t({:.2f}s) \t[{:.2f} mb/s | {:.0f} e/s]'.format(epoch+1, avgc, dt, len(c)/dt, np.sum(cc)/dt))
 
-            # save checkpoint every second epoch
-            if epoch % 2 == 0:
+            # save checkpoint every third epoch
+            if epoch % 3 == 0:
                 if save_path:
                     chckpt_path = save_path.format(epoch, avgc)
                     self.savemodel(path=chckpt_path)
