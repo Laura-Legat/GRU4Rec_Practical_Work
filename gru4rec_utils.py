@@ -70,19 +70,19 @@ def combine_scores(gru4rec_scores, ex2vec_scores, alpha_list, mode = 'direct', e
     alphas_tensor = torch.tensor(alpha_list, device=gru4rec_scores.device).view(num_alphas, 1, 1)
 
     if mode == 'direct':
-        # zero out scores where ex2vec_scores <= 0.5
+        # zero out scores where ex2vec_scores < 0.5
         #if ex2vec_threshold: ex2vec_scores = ex2vec_scores * (ex2vec_scores >= ex2vec_threshold)
         combined_scores = ex2vec_scores.unsqueeze(0).repeat(num_alphas, 1, 1)
     elif mode == 'weighted':
-        # zero out scores where ex2vec_scores <= 0.5
+        # zero out scores where ex2vec_scores < 0.5
         if ex2vec_threshold: ex2vec_scores = ex2vec_scores * (ex2vec_scores >=  ex2vec_threshold)
         combined_scores = (alphas_tensor * gru4rec_scores) + ((1 - alphas_tensor) * ex2vec_scores)
     elif mode == 'boosted':
-        # zero out scores where ex2vec_scores <= 0.5
+        # zero out scores where ex2vec_scores < 0.5
         if ex2vec_threshold: ex2vec_scores = ex2vec_scores * (ex2vec_scores >= ex2vec_threshold)
         combined_scores = gru4rec_scores + (alphas_tensor * ex2vec_scores)
     elif mode == 'mult':
-        # zero out scores where ex2vec_scores <= 0.5
+        # zero out scores where ex2vec_scores < 0.5
         #if ex2vec_threshold: ex2vec_scores = ex2vec_scores * (ex2vec_scores >= ex2vec_threshold)
         combined_scores = (gru4rec_scores * ex2vec_scores).repeat(num_alphas, 1, 1)
     else:
